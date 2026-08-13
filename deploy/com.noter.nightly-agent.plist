@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Nightly agent-classifier run (no API credits). Runs 23:50 local daily.
+     Use this INSTEAD of com.noter.stage.plist if you don't have API credits.
+     Still needs the Notion integration connected to the Dashboard for Notion writes. -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.noter.nightly-agent</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/Users/punmyidol/Documents/vscode-projects/noter/deploy/run_night_agent.sh</string>
+  </array>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key><integer>23</integer>
+    <key>Minute</key><integer>50</integer>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>/Users/punmyidol/Documents/vscode-projects/noter/deploy/nightly-agent.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/punmyidol/Documents/vscode-projects/noter/deploy/nightly-agent.log</string>
+</dict>
+</plist>

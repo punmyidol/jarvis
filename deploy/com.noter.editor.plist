@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Always-on idea-dump editor at http://localhost:3000.
+     KeepAlive relaunches it if it ever exits; RunAtLoad starts it at login.
+     A node server survives sleep and resumes on wake; this guarantees it's
+     back if anything ever kills it. Safe: a plain local web server, no
+     permission bypass. Install: see README. -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.noter.editor</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/bin/node</string>
+    <string>/Users/punmyidol/Library/Mobile Documents/iCloud~md~obsidian/Documents/elvis/Noter/server.js</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/punmyidol/Library/Mobile Documents/iCloud~md~obsidian/Documents/elvis/Noter</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>/Users/punmyidol/Documents/vscode-projects/noter/deploy/editor.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/punmyidol/Documents/vscode-projects/noter/deploy/editor.log</string>
+</dict>
+</plist>

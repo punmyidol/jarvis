@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Editor</title>
+<script src="marked.min.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    background: #1e1e1e;
+    color: #dcddde;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-size: 17px;
+    line-height: 1.7;
+  }
+  #doc { min-height: 100vh; max-width: 900px; margin: 0 auto; padding: 48px 24px; caret-color: #4ec8ed; }
+  .row { display: flex; align-items: flex-start; gap: 16px; }
+  .ts {
+    flex: 0 0 64px;
+    text-align: right;
+    color: #5a5a62;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+    user-select: none;
+    -webkit-user-select: none;
+    white-space: nowrap;
+    padding-top: 6px;
+  }
+  .block { flex: 1 1 auto; outline: none; min-height: 1.7em; word-break: break-word; }
+  .block.editing { white-space: pre-wrap; font-family: inherit; }
+
+  /* ---- rendered markdown (Obsidian-ish, dark) ---- */
+  .block > :first-child { margin-top: 0; }
+  .block > :last-child  { margin-bottom: 0; }
+  .block p { margin: 0; }
+  .block h1, .block h2, .block h3, .block h4, .block h5, .block h6 { font-weight: 700; line-height: 1.3; margin: 2px 0; }
+  .block h1 { font-size: 1.8em; }
+  .block h2 { font-size: 1.5em; }
+  .block h3 { font-size: 1.25em; }
+  .block h4 { font-size: 1.1em; }
+  .block h5, .block h6 { font-size: 1em; color: #b8b8c0; }
+  .block a { color: #7f9cf5; text-decoration: none; }
+  .block a:hover { text-decoration: underline; }
+  .block strong { color: #fff; }
+  .block em { font-style: italic; }
+  .block del { color: #8a8a90; }
+  .block ul, .block ol { margin: 0; padding-left: 1.5em; }
+  .block blockquote { border-left: 3px solid #4a4a52; padding-left: 12px; color: #a8a8b0; }
+  .block hr { border: none; border-top: 1px solid #3a3a3f; margin: 8px 0; }
+  /* inline code */
+  .block :not(pre) > code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.86em; color: #d98e6a; background: #2a2a2e; padding: 1px 5px; border-radius: 4px;
+  }
+  /* fenced code block */
+  .block pre {
+    background: #161616; border: 1px solid #2a2a2e; border-radius: 8px;
+    padding: 12px 14px; margin: 6px 0; overflow-x: auto;
+  }
+  .block pre code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 13.5px; line-height: 1.5; color: #c8d3a6; background: none; padding: 0;
+  }
+  /* tables */
+  .block table { border-collapse: collapse; margin: 6px 0; font-size: 14px; }
+  .block th, .block td { border: 1px solid #3a3a3f; padding: 4px 12px; text-align: left; }
+  .block th { background: #26262b; font-weight: 600; color: #e6e6e6; }
+  ::selection { background: #3a3a5a; }
+</style>
+</head>
+<body>
+  <div id="doc"></div>
+<script>
+  marked.setOptions({ gfm: true, breaks: false, headerIds: false, mangle: false });
+  const doc = document.getElementById('doc');
+
+  function stamp() {
+    const d = new Date();
+    const p = n => String(n).padStart(2, '0');
+    return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+  }
+  function render(src) { return src.trim() === '' ? '' : marked.parse(src); }
+
+  // ---------- blocks ----------
+  function makeRow(src = '') {
+    const row = document.createElement('div');
+    row.className = 'row';
+    const ts = document.createElement('div');
+    ts.className = 'ts';
+    ts.contentEditable = 'false';
+    const block = document.createElement('div');
+    block.className = 'block';
+    block.contentEditable = 'true';
+    block.dataset.md = src;
+    block.innerHTML = render(src);
+    row.appendChild(ts);
+    row.appendChild(block);
+    return { row, block };
+  }
+  function makeRowWithTs(ts, src) {
+    const { row, block } = makeRow(src);
+    if (ts) row.querySelector('.ts').textContent = ts;
+    return { row, block };
+  }
+  function syncTs(block) {
+    const ts = block.parentElement.querySelector('.ts');
+    if ((block.dataset.md || '').trim() !== '') { if (!ts.textContent) ts.textContent = stamp(); }
+    else ts.textContent = '';
+  }
+
+  function caretIndex(block) {
+    const sel = window.getSelection();
+    if (!sel.rangeCount) return (block.textContent || '').length;
+    const r = sel.getRangeAt(0);
+    const pre = r.cloneRange();
+    pre.selectNodeContents(block);
+    pre.setEnd(r.endContainer, r.endOffset);
+    return pre.toString().length;
+  }
+  function setCaret(block, index) {
+    block.focus();
+    if (!block.firstChild) block.appendChild(document.createTextNode(''));
+    const node = block.firstChild;
+    const len = node.nodeType === 3 ? node.length : 0;
+    const r = document.createRange();
+    r.setStart(node, Math.max(0, Math.min(index, len)));
+    r.collapse(true);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(r);
+  }
+
+  // ---------- edit (raw) vs view (rendered) ----------
+  function enterEdit(block) {
+    if (block.classList.contains('editing')) return;
+    block.classList.add('editing');
+    block.textContent = block.dataset.md || '';
+  }
+  function leaveEdit(block) {
+    if (!block.classList.contains('editing')) return;
+    block.classList.remove('editing');
+    block.dataset.md = block.textContent;
+    block.innerHTML = render(block.dataset.md);
+  }
+  doc.addEventListener('focusin', e => {
+    const block = e.target.closest('.block');
+    if (!block) return;
+    enterEdit(block);
+    setCaret(block, (block.textContent || '').length);
+  });
+  doc.addEventListener('focusout', e => {
+    const block = e.target.closest('.block');
+    if (!block) return;
+    leaveEdit(block);
+    scheduleSave();
+  });
+
+  doc.addEventListener('input', e => {
+    const block = e.target.closest('.block');
+    if (block) { block.dataset.md = block.textContent; syncTs(block); }
+    scheduleSave();
+  });
+
+  // newline-within-block when inside a code fence or a table; otherwise split into a new block
+  function shouldStayInBlock(before, after) {
+    const fences = (before.match(/^```/mg) || []).length;
+    if (fences % 2 === 1) return true;                 // inside an open ``` fence
+    const curLineStart = before.lastIndexOf('\n') + 1;
+    const curLine = before.slice(curLineStart);
+    if (/^\s*```/.test(curLine)) return true;          // line that opens a fence
+    if (/^\s*\|/.test(curLine)) return true;           // building a table row
+    if (/^\s*\|/.test(after.split('\n')[0] || '')) return true;
+    return false;
+  }
+
+  doc.addEventListener('keydown', e => {
+    const block = e.target.closest('.block');
+    if (!block) return;
+
+    if (e.key === 'Enter' && !e.shiftKey) {
+      const idx = caretIndex(block);
+      const src = block.textContent;
+      const before = src.slice(0, idx), after = src.slice(idx);
+      e.preventDefault();
+      if (shouldStayInBlock(before, after)) {
+        block.textContent = before + '\n' + after;
+        block.dataset.md = block.textContent;
+        setCaret(block, idx + 1);
+        syncTs(block);
+      } else {
+        block.textContent = before;
+        block.dataset.md = before;
+        syncTs(block);
+        const { row, block: nb } = makeRow(after);
+        block.parentElement.after(row);
+        setCaret(nb, 0);       // focusin keeps it in edit mode
+        syncTs(nb);
+      }
+    } else if (e.key === 'Backspace' && caretIndex(block) === 0) {
+      const row = block.parentElement;
+      const prevRow = row.previousElementSibling;
+      if (prevRow) {
+        e.preventDefault();
+        const prevBlock = prevRow.querySelector('.block');
+        enterEdit(prevBlock);
+        const join = prevBlock.textContent.length;
+        prevBlock.textContent = prevBlock.textContent + block.textContent;
+        prevBlock.dataset.md = prevBlock.textContent;
+        row.remove();
+        syncTs(prevBlock);
+        setCaret(prevBlock, join);
+      }
+    }
+  });
+
+  // ---------- box-drawing/ascii table -> markdown ----------
+  function parseTable(text) {
+    const raw = text.replace(/\r/g, '').split('\n').filter(l => l.trim() !== '');
+    const isBorder = l => !/[A-Za-z0-9]/.test(l);
+    const dataLines = raw.filter(l => /[│|]/.test(l) && !isBorder(l));
+    if (!dataLines.length) return null;
+    const rows = dataLines.map(l => {
+      const cells = l.split(/[│|]/).map(c => c.trim());
+      if (cells[0] === '') cells.shift();
+      if (cells.length && cells[cells.length - 1] === '') cells.pop();
+      return cells;
+    }).filter(r => r.length);
+    const cols = Math.max(...rows.map(r => r.length));
+    if (cols < 2) return null;
+    rows.forEach(r => { while (r.length < cols) r.push(''); });
+    return rows;
+  }
+  function tableToMd(rows) {
+    const out = ['| ' + rows[0].join(' | ') + ' |',
+                 '| ' + rows[0].map(() => '---').join(' | ') + ' |'];
+    for (let i = 1; i < rows.length; i++) out.push('| ' + rows[i].join(' | ') + ' |');
+    return out.join('\n');
+  }
+  function looksLikeCode(t) {
+    const s = t.trim();
+    if (!s) return false;
+    const sym = (s.match(/[{}\[\]()=;&<>]|==|=>|->|::|!=/g) || []).length;
+    const kw = /\b(def|class|import|from|return|function|const|let|var|for|while|elif|lambda)\b/.test(s);
+    return sym >= 2 || kw;
+  }
+  function insertBlockAfter(block, src) {
+    const cur = block.parentElement;
+    leaveEdit(block);
+    const { row, block: nb } = makeRow(src);
+    nb.parentElement; // noop
+    cur.after(row);
+    row.querySelector('.ts').textContent = stamp();
+    // if the source block was empty, drop it
+    if ((block.dataset.md || '') === '') cur.remove();
+    // trailing empty block to continue typing in normal text
+    const { row: tailRow, block: tail } = makeRow('');
+    row.after(tailRow);
+    setCaret(tail, 0);
+    scheduleSave();
+  }
+
+  doc.addEventListener('paste', e => {
+    const text = (e.clipboardData || window.clipboardData).getData('text');
+    if (!text) return;
+    const block = (window.getSelection().anchorNode && (
+      window.getSelection().anchorNode.nodeType === 1
+        ? window.getSelection().anchorNode
+        : window.getSelection().anchorNode.parentElement)).closest('.block');
+    if (!block) return;
+
+    // a table (box-drawing or markdown) -> its own block, rendered by marked
+    if (/[│|]/.test(text)) {
+      const rows = parseTable(text);
+      if (rows) { e.preventDefault(); insertBlockAfter(block, tableToMd(rows)); return; }
+    }
+    // multi-line code -> fenced code block of its own
+    if (/\n/.test(text.trim()) && looksLikeCode(text)) {
+      e.preventDefault();
+      insertBlockAfter(block, '```\n' + text.replace(/\r/g, '').replace(/\n+$/, '') + '\n```');
+      return;
+    }
+    // short single-line code -> inline code inserted at caret
+    if (looksLikeCode(text) && !/[`\n]/.test(text)) {
+      e.preventDefault();
+      const sel = window.getSelection();
+      const r = sel.getRangeAt(0);
+      r.deleteContents();
+      r.insertNode(document.createTextNode('`' + text + '`'));
+      sel.collapseToEnd();
+      block.dataset.md = block.textContent;
+      syncTs(block);
+      scheduleSave();
+    }
+    // else: default plain-text paste
+  });
+
+  // ---------- persistence ----------
+  function serialize() {
+    const out = [];
+    doc.querySelectorAll('.row').forEach(row => {
+      const ts = row.querySelector('.ts').textContent;
+      const src = row.querySelector('.block').dataset.md || '';
+      const lines = src.split('\n');
+      lines.forEach((l, i) => out.push((i === 0 ? ts : '') + '\t' + l));
+    });
+    return out.join('\n');
+  }
+  let saveTimer = null;
+  function scheduleSave() {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => {
+      fetch('/api/content', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: serialize() })
+      }).catch(() => {});
+    }, 800);
+  }
+
+  // ---------- midnight rollover ----------
+  // setTimeout alone is unreliable here: if the tab is backgrounded or the
+  // machine sleeps through midnight, the browser can throttle/miss the timer
+  // entirely, leaving the previous day's content in the DOM. The next edit
+  // then POSTs that whole stale document and it gets saved under the new
+  // day's filename. So a precise setTimeout drives the common case, plus a
+  // cheap periodic day-check (immune to missed timers, since it just compares
+  // dates on every tick/wake) self-heals if the timeout didn't fire.
+  function todayName(d = new Date()) {
+    const p = n => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  }
+  let currentDay = todayName();
+  function rollover() {
+    doc.innerHTML = '';
+    const fresh = makeRow('');
+    doc.appendChild(fresh.row);
+    setCaret(fresh.block, 0);
+    currentDay = todayName();
+  }
+  function scheduleMidnight() {
+    const now = new Date();
+    const next = new Date(now);
+    next.setHours(24, 0, 0, 0);
+    setTimeout(() => {
+      rollover();
+      scheduleMidnight();
+    }, next - now);
+  }
+  scheduleMidnight();
+  setInterval(() => { if (todayName() !== currentDay) rollover(); }, 30 * 1000);
+
+  // ---------- load today's file (regroup multi-line blocks by structure) ----------
+  fetch('/api/content')
+    .then(r => r.json())
+    .then(({ content }) => {
+      if (content && content.trim()) {
+        const lines = content.split('\n').map(l => {
+          const tab = l.indexOf('\t');
+          return { ts: tab >= 0 ? l.slice(0, tab) : '', text: tab >= 0 ? l.slice(tab + 1) : l };
+        });
+        let i = 0;
+        while (i < lines.length) {
+          const { ts, text } = lines[i];
+          if (/^\s*```/.test(text)) {                 // fenced code block
+            const buf = [text]; i++;
+            while (i < lines.length && !/^\s*```/.test(lines[i].text)) { buf.push(lines[i].text); i++; }
+            if (i < lines.length) { buf.push(lines[i].text); i++; }
+            doc.appendChild(makeRowWithTs(ts, buf.join('\n')).row);
+          } else if (/^\s*\|/.test(text)) {           // markdown table
+            const buf = [text]; i++;
+            while (i < lines.length && /^\s*\|/.test(lines[i].text)) { buf.push(lines[i].text); i++; }
+            doc.appendChild(makeRowWithTs(ts, buf.join('\n')).row);
+          } else {                                    // single-line block
+            doc.appendChild(makeRowWithTs(ts, text).row);
+            i++;
+          }
+        }
+        const last = doc.querySelector('.row:last-child .block');
+        if (last) setCaret(last, (last.textContent || '').length);
+      } else {
+        const first = makeRow('');
+        doc.appendChild(first.row);
+        setCaret(first.block, 0);
+      }
+    })
+    .catch(() => {
+      const first = makeRow('');
+      doc.appendChild(first.row);
+      setCaret(first.block, 0);
+    });
+</script>
+</body>
+</html>

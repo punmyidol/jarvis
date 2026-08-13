@@ -12,10 +12,10 @@
   <key>ProgramArguments</key>
   <array>
     <string>/usr/local/bin/node</string>
-    <string>/Users/punmyidol/Library/Mobile Documents/iCloud~md~obsidian/Documents/elvis/Noter/server.js</string>
+    <string>/Users/punmyidol/Documents/vscode-projects/noter/editor/server.js</string>
   </array>
   <key>WorkingDirectory</key>
-  <string>/Users/punmyidol/Library/Mobile Documents/iCloud~md~obsidian/Documents/elvis/Noter</string>
+  <string>/Users/punmyidol/Documents/vscode-projects/noter/editor</string>
   <key>RunAtLoad</key>
   <true/>
   <key>KeepAlive</key>

@@ -183,9 +183,11 @@ until `/bin/bash` is granted Full Disk Access — the project lives in the TCC-p
 `~/Documents`.)
 
 ### Config / secrets
-`.env` (git-ignored) holds `ANTHROPIC_API_KEY` + `NOTION_TOKEN`. Capture is unchanged: the
-brain-dump editor (`…/elvis/Noter/server.js` + `editor.html`) on `localhost:3000` saves
-`Noter/dailies/<date>.md`, which the pipeline only reads. Scope is **forward-only** (no backfill).
+`.env` (git-ignored) holds `ANTHROPIC_API_KEY` + `NOTION_TOKEN` + optionally `NOTER_VAULT`. The
+brain-dump editor (`editor/server.js` + `editor/editor.html`, launchd job `com.noter.editor`) on
+`localhost:3000` lives in this repo but still saves to the vault — it reads `NOTER_VAULT` from
+`.env` (same var/default as `noter/config.py`) and writes `<vault>/Noter/dailies/<date>.md`,
+which the pipeline only reads. Scope is **forward-only** (no backfill).
 
 ### Status / outstanding
 - **Run so far:** 2026-06-28 (agent-classified; 14 rows in Noter Review + 2 notes in vault);

@@ -87,8 +87,10 @@ TODO_NOTION_PAGE = "37526f5d5d608085a006e7af18a92f68"  # Projects DB "/todo" pag
 DASHBOARD_PAGE_ID = "37226f5d5d608018b9eaf0a4dad1f358"
 TASKS_DATABASE_ID = "37326f5d5d608038b826c84e148a15a7"     # ✅ Tasks (existing)
 PROJECTS_DATABASE_ID = "37326f5d5d6080b09688e91833d099d8"  # Projects (relation target)
+SHOPPING_DATABASE_ID = "3bd26f5d5d6080d3aeebda5ea71bcdd4"  # Shopping List (existing)
 TASKS_DATA_SOURCE = "37326f5d-5d60-80ad-a398-000b425007cb"
 PROJECTS_DATA_SOURCE = "37326f5d-5d60-80a8-84f2-000bef6bf847"
+SHOPPING_DATA_SOURCE = "3bd26f5d-5d60-80e9-9bd4-000bbe2bd7cb"
 NOTION_VERSION = os.environ.get("NOTION_VERSION", "2022-06-28")
 
 # Property names on the existing Tasks DB (confirmed live)
@@ -96,6 +98,10 @@ TASK_TITLE_PROP = "Task"
 TASK_DUE_PROP = "Due Date"
 TASK_RELATION_PROP = "relation"
 TASK_DONE_PROP = "Done"
+
+# Property names on the existing Shopping List DB (confirmed live)
+SHOPPING_TITLE_PROP = "Name"
+SHOPPING_CHECK_PROP = "Checkbox"
 # Ids of the DBs this pipeline creates, cached here after first creation.
 NOTION_IDS_CACHE = Path(__file__).resolve().parent / "notion_ids.json"
 

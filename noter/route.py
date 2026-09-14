@@ -1,20 +1,35 @@
 """Dispatch a single classified row to its destination.
 
-    task              -> Notion Tasks DB (upsert by title+due)
-    event             -> Notion Events DB
-    remember + person -> local profiles.csv + profiles/<name>.md (per person)
-    remember, no one  -> vault Remember.md
-    note + project    -> vault <project folder>/Notes.md
-    note + other      -> vault ideas.md
+    task, buy/pick up/purchase/... -> Notion Shopping List DB (upsert by title)
+    task, otherwise           -> Notion Tasks DB (upsert by title+due)
+    event                     -> Notion Events DB
+    remember + person         -> local profiles.csv + profiles/<name>.md (per person)
+    remember, no one          -> vault Remember.md
+    note + project            -> vault <project folder>/Notes.md
+    note + other              -> vault ideas.md
 
 `dry_run` returns the intended action string without writing anything.
 """
 from __future__ import annotations
 
+import re
 import time
 from pathlib import Path
 
 from . import config, profiles
+
+# A task whose title opens with an unambiguous buy-verb is a grocery/errand
+# item -> Shopping List instead of Tasks. "get" is deliberately excluded —
+# too generic ("get to work early", "get back to Sarah" aren't shopping).
+# Thai "ซื้อ" ("buy") included since real usage already has Thai-language
+# lines; Thai has no spaces between words, so \b never matches after it (it'd
+# run straight into the object) — matched separately, with no boundary
+# requirement.
+_SHOPPING_RE = re.compile(r"^(buy|pick up|purchase)\b|^ซื้อ", re.IGNORECASE)
+
+
+def _is_shopping_item(title: str) -> bool:
+    return bool(_SHOPPING_RE.match((title or "").strip()))
 
 
 def _write_retry(path: Path, text: str, tries: int = 5, delay: float = 0.3) -> None:
@@ -85,6 +100,12 @@ def route_row(notion, row: dict, dry_run: bool = False, supporting: list[dict] |
     content = row.get("content", "")[:60]
 
     if cat == "task":
+        title = row.get("clean_content") or row.get("content", "")
+        if _is_shopping_item(title):
+            if dry_run:
+                return f"[task] -> Notion Shopping List (item={title[:40]!r})"
+            created = notion.upsert_shopping_item(row)
+            return f"[task] -> Notion Shopping List ({'created' if created else 'dup, skipped'})"
         dest = "Notion Tasks"
         notes = sorted(supporting or [], key=lambda s: s.get("datetime", ""))
         bullets = [f"{s.get('datetime','')} {s.get('content','')}".strip() for s in notes]

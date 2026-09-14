@@ -116,6 +116,7 @@ the Obsidian vault, or local person profiles), gated by a confidence check with 
 | `review_cli.py` | **interactive local review**: walk LOW rows (from `all.csv`) in batches of 10, edit any column inline, then file + append gold/corrections |
 | `review.py` / `commit.py` | **retired (Notion review path)** — legacy Notion "Noter Review" staging + morning commit; superseded by `review_cli.py`, no longer wired into `run_daily` |
 | `notion.py` | Notion REST (token) client: relation map, create/query DBs, upsert, append bullets |
+| `sync_reminders.py` | best-effort, local-only: push open Notion Shopping List items into a macOS Reminders.app list (one-way; AppleScript can't set the location trigger itself, see Status/outstanding) |
 | `run_daily.py` | orchestrator: fetch → classify → overrides → confidence split → auto-file HIGH+tasks / leave LOW in `all.csv` for review |
 | `agent_prep.py` | write the agent-classifier handoff file (for API-free runs) |
 
@@ -126,7 +127,8 @@ Run: `python -m noter.run_daily --date today` (flags: `--dry-run`, `--from-csv <
 ### Routing (per category)
 | category | destination |
 |---|---|
-| `task` | **Notion Tasks DB** (existing): `Task`←`clean_content` (short title) or content, `Due Date`←`due_date`(+`due_time`), `relation`←project (**`other`→the `/todo` page**), `Done`=off; upsert by title+due(date part). **Page body** = `task_context` (its URL/ref) + the task's same-group **supporting notes**, folded in as bullets (those notes are not routed separately); on a dup only missing bullets are appended |
+| `task`, buy/pick up/purchase/ซื้อ… | **Notion Shopping List DB** (existing, manually created): `Name`←`clean_content` or content, `Checkbox`=off; upsert by title only. A leading unambiguous buy-verb (`route._is_shopping_item`; "get" excluded — too generic) reroutes the row here **instead of** Tasks — exclusive, not both |
+| `task`, otherwise | **Notion Tasks DB** (existing): `Task`←`clean_content` (short title) or content, `Due Date`←`due_date`(+`due_time`), `relation`←project (**`other`→the `/todo` page**), `Done`=off; upsert by title+due(date part). **Page body** = `task_context` (its URL/ref) + the task's same-group **supporting notes**, folded in as bullets (those notes are not routed separately); on a dup only missing bullets are appended |
 | `event` | **Notion Events DB** (new): `Name`←content, `Date`←`due_date`(+`due_time`) i.e. the occurrence date (falls back to the note's logging date only if no date was extractable), `Project`←relation; upsert by name+date(date part) |
 | `remember` + person | **local**: `datasets/profiles/<name>.md` (facts as `YYYY-MM-DD: …` bullets, `aliases:` header) + `datasets/profiles.csv` registry when the row's project isn't `other` |
 | `remember`, no person | vault `Remember.md` |
@@ -166,7 +168,9 @@ Not usable by the unattended cron (plain Python can't spawn a subagent).
 ### Notion databases (created under the Dashboard `37226f5d5d608018b9eaf0a4dad1f358`)
 Events `d98a6a4bc8f4498aa26088c4ccc8190d`,
 Noter Review `4a2938d187af4ab18097926fbb23d41c` (ids cached in `noter/notion_ids.json`).
-Existing: Tasks `37326f5d5d608038b826c84e148a15a7`, Projects `37326f5d5d6080b09688e91833d099d8`.
+Existing: Tasks `37326f5d5d608038b826c84e148a15a7`, Projects `37326f5d5d6080b09688e91833d099d8`,
+Shopping List `3bd26f5d5d6080d3aeebda5ea71bcdd4` (user-created, minimal schema: `Name` title +
+`Checkbox` bought/not; grocery/errand `task` rows route here instead of Tasks, see Routing).
 (A Notion Profiles DB `caba30c76c364b6487d8138a58846045` was created earlier but is no
 longer written by the pipeline — `remember`+person now routes to the local
 `datasets/profiles.csv`/`profiles/*.md` files instead, see Routing.)
@@ -199,6 +203,14 @@ which the pipeline only reads. Scope is **forward-only** (no backfill).
   rotate both secrets (pasted in chat).
 - Spec-vs-disk inconsistencies are recorded in `datasets/INCONSISTENCIES.md` (incl. this
   file's stale script paths and the missing `normalize_prompt.txt`).
+- **Needs the user (one-time, manual):** for a location-based "you're leaving home, here's
+  what's on the Shopping List" reminder, AppleScript can't set a location trigger — only
+  the Shortcuts app's GUI action picker can. `sync_reminders.py` keeps a macOS Reminders.app
+  "Shopping List" list in sync with Notion every `run_daily`; the user still needs to add,
+  once, a Personal Automation in Shortcuts (most reliably on the iPhone, since that's the
+  device with GPS — Reminders/iCloud syncs the list to it automatically) — trigger "Leave:
+  Home", action "Show/Speak the contents of the Reminders list 'Shopping List'" (or just
+  enable native Reminders location alerts on that list's items).
 
 ## Components
 | File | Role |

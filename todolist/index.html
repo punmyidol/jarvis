@@ -1,0 +1,529 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Todolist</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #1e1e1e;
+    color: #dcddde;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-size: 15px;
+    line-height: 1.5;
+  }
+  #wrap { max-width: 760px; margin: 0 auto; padding: 32px 20px 80px; }
+  header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; }
+  h1 { font-size: 22px; font-weight: 700; }
+  #meta { color: #7a7a82; font-size: 12px; }
+  button {
+    font: inherit; cursor: pointer; border: none; border-radius: 6px;
+    padding: 6px 12px; background: #2a2a2e; color: #dcddde;
+  }
+  button:hover { background: #35353a; }
+  button.primary { background: #3a6bd6; color: #fff; }
+  button.primary:hover { background: #4a7ae6; }
+  button:disabled { opacity: 0.5; cursor: default; }
+
+  .card {
+    background: #26262b; border: 1px solid #333338; border-radius: 10px;
+    padding: 16px 18px; margin-bottom: 12px;
+  }
+  .card.overdue { border-left: 3px solid #d97a7a; }
+  .card-top { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+  .title { font-weight: 600; font-size: 16px; }
+  .due { font-size: 12px; color: #a8a8b0; white-space: nowrap; }
+  .due.overdue { color: #e08a8a; }
+  .sub { margin-top: 4px; font-size: 12px; color: #8a8a92; }
+  .notes { margin-top: 10px; font-size: 13px; color: #b8b8c0; }
+  .notes ul { padding-left: 18px; margin-top: 4px; }
+  .notes li { margin: 2px 0; }
+
+  .badge {
+    display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 10px;
+    margin-left: 8px; vertical-align: middle;
+  }
+  .badge.running { background: #3a5a8a; color: #cfe0ff; }
+  .badge.finished { background: #2f6b3f; color: #cdf0d6; }
+  .badge.failed { background: #7a3535; color: #f5c9c9; }
+  .tail {
+    margin-top: 8px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11px; color: #9a9aa2; white-space: pre-wrap; word-break: break-word;
+    max-height: 80px; overflow-y: auto; background: #1a1a1d; border-radius: 6px; padding: 8px;
+  }
+
+  .badge.interrupted { background: #7a6a35; color: #f5e3c9; }
+
+  .transcript {
+    margin-top: 8px; display: flex; flex-direction: column; gap: 8px;
+    max-height: 320px; overflow-y: auto; padding: 4px 2px;
+  }
+  .turn { border-radius: 8px; padding: 8px 10px; font-size: 13px; max-width: 92%; }
+  .turn.user { align-self: flex-end; background: #2a4a7a; color: #dfe8fa; white-space: pre-wrap; }
+  .turn.assistant { align-self: flex-start; background: #26262b; border: 1px solid #333338; }
+  .turn.assistant.pending { opacity: 0.75; border-style: dashed; }
+  .turn.assistant :first-child { margin-top: 0; }
+  .turn.assistant :last-child { margin-bottom: 0; }
+  .turn.assistant p, .turn.assistant ul, .turn.assistant ol { margin: 6px 0; padding-left: 20px; }
+  .turn.assistant pre { background: #1a1a1d; padding: 8px; border-radius: 6px; overflow-x: auto; }
+  .turn.assistant code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+
+  .send-box, .reply-box { margin-top: 12px; display: none; }
+  .send-box.open, .reply-box.visible { display: block; }
+  .send-box textarea, .send-box input, .reply-box textarea {
+    width: 100%; background: #1a1a1d; border: 1px solid #35353a; border-radius: 6px;
+    color: #dcddde; font: inherit; padding: 8px; margin-top: 6px;
+  }
+  .send-box textarea, .reply-box textarea { min-height: 60px; resize: vertical; }
+  .send-box label { font-size: 11px; color: #8a8a92; }
+  .send-box .row, .reply-box .row { display: flex; gap: 8px; margin-top: 10px; }
+  .reply-box .hint { font-size: 11px; color: #8a8a92; margin-bottom: 2px; }
+  .reply-box.visible.active .hint { color: #7fa8f5; font-weight: 600; }
+  .reply-box.visible.active textarea { border-color: #3a6bd6; }
+  .reply-box:not(.active) textarea { opacity: 0.6; }
+  .actions { margin-top: 12px; }
+  #empty { color: #7a7a82; text-align: center; padding: 40px 0; }
+  #searchRow { margin-bottom: 16px; }
+  #searchInput {
+    width: 100%; background: #1a1a1d; border: 1px solid #35353a; border-radius: 6px;
+    color: #dcddde; font: inherit; padding: 8px 10px;
+  }
+  .error-banner {
+    background: #7a3535; color: #f5c9c9; border-radius: 8px;
+    padding: 10px 14px; margin-bottom: 16px; font-size: 13px;
+  }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <header>
+    <h1>Todolist</h1>
+    <div>
+      <span id="meta"></span>
+      <button id="refreshBtn">Refresh</button>
+    </div>
+  </header>
+  <div id="searchRow"><input id="searchInput" type="text" placeholder="Search tasks..."></div>
+  <div id="errorBanner" class="error-banner" hidden></div>
+  <div id="list"></div>
+  <div id="empty" style="display:none">No open tasks.</div>
+</div>
+
+<script src="/vendor/marked.min.js"></script>
+<script>
+  const list = document.getElementById('list');
+  const empty = document.getElementById('empty');
+  const meta = document.getElementById('meta');
+  const refreshBtn = document.getElementById('refreshBtn');
+  const errorBanner = document.getElementById('errorBanner');
+  const searchInput = document.getElementById('searchInput');
+
+  function showError(msg) {
+    errorBanner.textContent = msg;
+    errorBanner.hidden = false;
+  }
+
+  let tasks = [];
+  let status = {};
+  let searchQuery = '';
+  let notesCache = {};
+  let openSendBoxIds = new Set();
+  // How many of a card's status.turns are already appended to its
+  // .transcript-container - lets updateStatuses() append only new turns
+  // instead of re-rendering the whole transcript (which would lose scroll
+  // position), mirroring how the tail box already avoids full re-renders.
+  let renderedTurnCounts = {};
+
+  function getFilteredTasks() {
+    const q = searchQuery.trim().toLowerCase();
+    const filtered = q ? tasks.filter(t => (t.title || '').toLowerCase().includes(q)) : tasks.slice();
+    // Stable sort: running tasks float to the top, due-date order (already
+    // applied server-side) is preserved within both the running and
+    // not-running groups.
+    return filtered.sort((a, b) => {
+      const aRunning = status[a.id] && status[a.id].status === 'running' ? 0 : 1;
+      const bRunning = status[b.id] && status[b.id].status === 'running' ? 0 : 1;
+      return aRunning - bRunning;
+    });
+  }
+
+  function todayStr() {
+    return new Date().toISOString().slice(0, 10);
+  }
+
+  function fmtElapsed(startedAt) {
+    const s = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+    const m = Math.floor(s / 60);
+    const r = s % 60;
+    return `${m}:${String(r).padStart(2, '0')}`;
+  }
+
+  function statusBadgeHtml(id) {
+    const st = status[id];
+    if (!st) return '';
+    const doneBadge = st.markedDone ? `<span class="badge finished">✓ marked done</span>` : '';
+    let runBadge = '';
+    if (st.status === 'running') {
+      runBadge = st.awaitingInput
+        ? `<span class="badge running">your turn - reply below (${fmtElapsed(st.startedAt)})</span>`
+        : `<span class="badge running">Claude is working... (${fmtElapsed(st.startedAt)})</span>`;
+    } else if (st.status === 'finished') {
+      runBadge = `<span class="badge finished">finished</span>`;
+    } else if (st.status === 'failed') {
+      runBadge = `<span class="badge failed">failed${st.exitCode != null ? ' (' + st.exitCode + ')' : ''}</span>`;
+    } else if (st.status === 'interrupted') {
+      runBadge = `<span class="badge interrupted">interrupted (server restarted mid-run)</span>`;
+    }
+    return runBadge + doneBadge;
+  }
+
+  // Rebuild the visible cards from the current filtered task list. Runs on
+  // initial load / manual Refresh, on every search keystroke, and from the
+  // status poll whenever the set of running tasks changes (see pollStatus) -
+  // the notesCache and openSendBoxIds bookkeeping below exists so a re-render
+  // doesn't re-flash "loading notes..." or collapse an open send-box on a
+  // card that stays visible. Any in-progress typing in a send-box/reply-box
+  // is lost on this kind of re-render, same trade-off the search box already
+  // accepted - it only fires on a real start/stop transition, not every tick.
+  function renderList() {
+    list.innerHTML = '';
+    // Rebuilding the card DOM wipes any already-appended transcript nodes,
+    // so the "how much is already rendered" bookkeeping must reset with it -
+    // the next status poll (already running on its own timer) repopulates
+    // each transcript from scratch, same as the tail box does today.
+    renderedTurnCounts = {};
+    const visible = getFilteredTasks();
+    empty.style.display = visible.length ? 'none' : 'block';
+    empty.textContent = tasks.length ? 'No tasks match your search.' : 'No open tasks.';
+    for (const t of visible) {
+      const overdue = t.due_date && t.due_date < todayStr();
+      const card = document.createElement('div');
+      card.className = 'card' + (overdue ? ' overdue' : '');
+      card.dataset.id = t.id;
+
+      const st = status[t.id];
+      const sendDisabled = st && st.status === 'running';
+      const sendOpen = openSendBoxIds.has(t.id);
+      const notesHtml = notesCache[t.id] || '<div class="notes">loading notes...</div>';
+
+      card.innerHTML = `
+        <div class="card-top">
+          <div class="title">${escapeHtml(t.title)} <span class="status-badge">${statusBadgeHtml(t.id)}</span></div>
+          <div class="due ${overdue ? 'overdue' : ''}">${t.due_date || 'no due date'}</div>
+        </div>
+        <div class="sub">${t.project ? 'project: ' + escapeHtml(t.project) : 'no project'}</div>
+        <div class="notes-container">${notesHtml}</div>
+        <div class="tail-container"></div>
+        <div class="transcript-container"></div>
+        <div class="reply-box">
+          <div class="hint"></div>
+          <textarea placeholder="Reply to Claude..."></textarea>
+          <div class="row">
+            <button class="reply-send primary">Send</button>
+            <button class="reply-finish">Finish</button>
+          </div>
+        </div>
+        <div class="actions">
+          <button class="toggleSend" ${sendDisabled ? 'disabled' : ''}>Send to Claude</button>
+          <button class="markDone" ${st && st.markedDone ? 'disabled' : ''}>Mark done</button>
+        </div>
+        <div class="send-box${sendOpen ? ' open' : ''}">
+          <label>Additional instructions (optional)</label>
+          <textarea placeholder="Anything extra for Claude to know..."></textarea>
+          <label>Working directory (optional - leave blank to let Claude find it itself)</label>
+          <input type="text" placeholder="/path/to/project">
+          <div class="row">
+            <button class="go primary">Go</button>
+            <button class="cancel">Cancel</button>
+          </div>
+        </div>
+      `;
+
+      card.querySelector('.toggleSend').addEventListener('click', () => {
+        const open = card.querySelector('.send-box').classList.toggle('open');
+        if (open) openSendBoxIds.add(t.id);
+        else openSendBoxIds.delete(t.id);
+      });
+      card.querySelector('.cancel').addEventListener('click', () => {
+        card.querySelector('.send-box').classList.remove('open');
+        openSendBoxIds.delete(t.id);
+      });
+      card.querySelector('.go').addEventListener('click', async () => {
+        const instructions = card.querySelector('textarea').value;
+        const workdir = card.querySelector('input').value;
+        const goBtn = card.querySelector('.go');
+        goBtn.disabled = true;
+        try {
+          const r = await fetch(`/api/tasks/${encodeURIComponent(t.id)}/start`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ instructions, workdir }),
+          });
+          const data = await r.json();
+          if (!data.ok) throw new Error(data.error || 'failed to start');
+          card.querySelector('.send-box').classList.remove('open');
+          openSendBoxIds.delete(t.id);
+          // Fresh run - previous run's transcript (if any) no longer
+          // applies, so both the DOM and the "already rendered" bookkeeping
+          // must reset or new turns starting from index 0 would look like
+          // they're already rendered.
+          card.querySelector('.transcript-container').innerHTML = '';
+          renderedTurnCounts[t.id] = 0;
+          await pollStatus();
+        } catch (e) {
+          alert('Failed to start: ' + e.message);
+        } finally {
+          goBtn.disabled = false;
+        }
+      });
+
+      card.querySelector('.markDone').addEventListener('click', async () => {
+        const btn = card.querySelector('.markDone');
+        btn.disabled = true;
+        try {
+          const r = await fetch(`/api/tasks/${encodeURIComponent(t.id)}/mark-done`, { method: 'POST' });
+          const data = await r.json();
+          if (!data.ok) throw new Error(data.error || 'failed to mark done');
+          await pollStatus();
+        } catch (e) {
+          alert('Failed to mark done: ' + e.message);
+          btn.disabled = false;
+        }
+      });
+
+      card.querySelector('.reply-send').addEventListener('click', async () => {
+        const textarea = card.querySelector('.reply-box textarea');
+        const message = textarea.value;
+        if (!message.trim()) return;
+        const sendBtn = card.querySelector('.reply-send');
+        sendBtn.disabled = true;
+        try {
+          const r = await fetch(`/api/tasks/${encodeURIComponent(t.id)}/reply`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ message }),
+          });
+          const data = await r.json();
+          if (!data.ok) throw new Error(data.error || 'failed to send reply');
+          textarea.value = '';
+          await pollStatus();
+        } catch (e) {
+          alert('Failed to send: ' + e.message);
+        } finally {
+          sendBtn.disabled = false;
+        }
+      });
+
+      card.querySelector('.reply-finish').addEventListener('click', async () => {
+        const finishBtn = card.querySelector('.reply-finish');
+        finishBtn.disabled = true;
+        try {
+          await fetch(`/api/tasks/${encodeURIComponent(t.id)}/finish`, { method: 'POST' });
+          await pollStatus();
+        } finally {
+          finishBtn.disabled = false;
+        }
+      });
+
+      list.appendChild(card);
+    }
+  }
+
+  function renderMarkdown(text) {
+    try {
+      return marked.parse(text || '');
+    } catch {
+      return escapeHtml(text || '');
+    }
+  }
+
+  function turnNode(turn) {
+    const el = document.createElement('div');
+    if (turn.role === 'user') {
+      el.className = 'turn user';
+      el.textContent = turn.text;
+    } else {
+      el.className = 'turn assistant';
+      el.innerHTML = renderMarkdown(turn.text);
+    }
+    return el;
+  }
+
+  // Appends only the turns past renderedTurnCounts[id] as new DOM nodes -
+  // never re-renders already-appended turns, so scroll position survives a
+  // poll tick. Separately keeps one dedicated "pending" node in sync with
+  // the live in-progress text every tick (that one node IS replaced each
+  // time, since it represents content that's still changing).
+  function updateTranscript(id, container, st) {
+    const finalTurns = (st && st.turns) || [];
+    const already = renderedTurnCounts[id] || 0;
+    if (finalTurns.length > already) {
+      const wasNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 40;
+      const pending = container.querySelector('.turn.assistant.pending');
+      for (let i = already; i < finalTurns.length; i++) {
+        const node = turnNode(finalTurns[i]);
+        if (pending) container.insertBefore(node, pending);
+        else container.appendChild(node);
+      }
+      renderedTurnCounts[id] = finalTurns.length;
+      if (wasNearBottom) container.scrollTop = container.scrollHeight;
+    }
+
+    let pending = container.querySelector('.turn.assistant.pending');
+    const streamingText = st && st.streamingText;
+    if (streamingText) {
+      if (!pending) {
+        pending = document.createElement('div');
+        pending.className = 'turn assistant pending';
+        container.appendChild(pending);
+      }
+      pending.innerHTML = renderMarkdown(streamingText);
+    } else if (pending) {
+      pending.remove();
+    }
+  }
+
+  // Called every 2s by the status poll. Patches only the badge, tail preview,
+  // transcript, and the disabled/active state of the "Send to Claude" and
+  // reply controls on already-rendered cards - never touches
+  // .send-box/.reply-box textarea values, so it can't interrupt your typing.
+  function updateStatuses() {
+    for (const card of list.querySelectorAll('.card')) {
+      const id = card.dataset.id;
+      const st = status[id];
+
+      const badgeEl = card.querySelector('.status-badge');
+      if (badgeEl) badgeEl.innerHTML = statusBadgeHtml(id);
+
+      const tailEl = card.querySelector('.tail-container');
+      if (tailEl) {
+        tailEl.innerHTML = st && st.tail ? `<div class="tail">${escapeHtml(st.tail)}</div>` : '';
+      }
+
+      const transcriptContainer = card.querySelector('.transcript-container');
+      if (transcriptContainer) {
+        let transcriptEl = transcriptContainer.querySelector('.transcript');
+        const hasContent = st && ((st.turns && st.turns.length) || st.streamingText);
+        if (hasContent && !transcriptEl) {
+          transcriptEl = document.createElement('div');
+          transcriptEl.className = 'transcript';
+          transcriptContainer.appendChild(transcriptEl);
+        }
+        if (transcriptEl) updateTranscript(id, transcriptEl, st);
+      }
+
+      const toggleBtn = card.querySelector('.toggleSend');
+      if (toggleBtn) toggleBtn.disabled = Boolean(st && st.status === 'running');
+
+      const markDoneBtn = card.querySelector('.markDone');
+      if (markDoneBtn) markDoneBtn.disabled = Boolean(st && st.markedDone);
+
+      const replyBox = card.querySelector('.reply-box');
+      if (replyBox) {
+        const visible = Boolean(st && st.status === 'running');
+        const active = visible && st.awaitingInput;
+        replyBox.classList.toggle('visible', visible);
+        replyBox.classList.toggle('active', active);
+        replyBox.querySelector('.hint').textContent = active
+          ? 'Your turn - Claude is waiting for a reply.'
+          : 'Claude is working...';
+        replyBox.querySelector('textarea').disabled = !active;
+        replyBox.querySelector('.reply-send').disabled = !active;
+      }
+    }
+  }
+
+  // Notes are fetched *after* the list is already visible, a few tasks at a
+  // time, instead of blocking the initial render on all of them (that's what
+  // made a refresh take ~10s with a large backlog) or not fetching them at
+  // all (which just hides the content). They stream in progressively.
+  async function loadAllNotes(taskList) {
+    taskList = taskList.filter(t => !notesCache[t.id]);
+    if (!taskList.length) return;
+    const NOTES_CONCURRENCY = 4;
+    let next = 0;
+    async function worker() {
+      while (next < taskList.length) {
+        const t = taskList[next++];
+        const card = list.querySelector(`.card[data-id="${CSS.escape(t.id)}"]`);
+        const container = card && card.querySelector('.notes-container');
+        if (!container) continue;
+        try {
+          const r = await fetch(`/api/tasks/${encodeURIComponent(t.id)}/notes`);
+          const { notes } = await r.json();
+          const html = notes && notes.length
+            ? `<div class="notes"><ul>${notes.map(n => `<li>${escapeHtml(n)}</li>`).join('')}</ul></div>`
+            : '<div class="notes">(no notes)</div>';
+          notesCache[t.id] = html;
+          container.innerHTML = html;
+        } catch {
+          container.innerHTML = '<div class="notes">failed to load notes</div>';
+        }
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(NOTES_CONCURRENCY, taskList.length) }, worker));
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, c => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    }[c]));
+  }
+
+  async function loadTasks() {
+    meta.textContent = 'loading...';
+    errorBanner.hidden = true;
+    try {
+      const r = await fetch('/api/tasks');
+      const data = await r.json();
+      if (!r.ok) {
+        if (data.rateLimited) showError(data.error);
+        else meta.textContent = 'failed to load tasks';
+        return;
+      }
+      tasks = data;
+      notesCache = {};
+      meta.textContent = `refreshed ${new Date().toLocaleTimeString()}`;
+      renderList();
+      loadAllNotes(getFilteredTasks());
+    } catch (e) {
+      meta.textContent = 'failed to load tasks';
+    }
+  }
+
+  // Only reordering (a running task starting/stopping) needs a full
+  // renderList() re-sort; every other poll tick just patches badges/tail/
+  // transcript in place via updateStatuses() so open textareas and scroll
+  // position survive.
+  let lastRunningKey = '';
+
+  async function pollStatus() {
+    try {
+      const r = await fetch('/api/status');
+      status = await r.json();
+      const runningKey = Object.keys(status)
+        .filter(id => status[id].status === 'running')
+        .sort()
+        .join(',');
+      if (runningKey !== lastRunningKey) {
+        lastRunningKey = runningKey;
+        renderList();
+      }
+      updateStatuses();
+    } catch {}
+  }
+
+  searchInput.addEventListener('input', () => {
+    searchQuery = searchInput.value;
+    renderList();
+    loadAllNotes(getFilteredTasks());
+  });
+
+  refreshBtn.addEventListener('click', loadTasks);
+  loadTasks();
+  pollStatus();
+  setInterval(pollStatus, 2000);
+</script>
+</body>
+</html>

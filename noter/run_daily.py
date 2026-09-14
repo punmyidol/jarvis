@@ -100,7 +100,19 @@ def run(date: str, dry_run: bool = False, from_csv: str | None = None,
             print(f"  [{r.get('category')}/{r.get('project')}] {r.get('content','')[:60]}")
         print("  Run 'python -m noter.review_cli' to edit + file them.")
 
-    # 7. flags + summary
+    # 7. best-effort: push open Shopping List items into Reminders.app (local
+    #    only; the location-trigger itself is set up by hand in Shortcuts).
+    if not dry_run and notion is not None:
+        try:
+            from . import sync_reminders
+            result = sync_reminders.sync(notion)
+            if result["added"] or result["completed"]:
+                print(f"\nReminders sync: +{len(result['added'])} added, "
+                      f"{len(result['completed'])} completed")
+        except Exception as e:
+            print(f"\nReminders sync skipped ({e})")
+
+    # 8. flags + summary
     overridden = [r for r in rows if r.get("override")]
     unmapped = [r for r in rows
                 if r.get("category") in ("task", "event")

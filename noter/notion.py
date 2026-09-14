@@ -212,6 +212,30 @@ class Notion:
                   })
         return True
 
+    def upsert_shopping_item(self, row: dict) -> bool:
+        """Create a Shopping List page unless one with the same title exists."""
+        title = row.get("clean_content") or row["content"]
+        if self._title_exists(config.SHOPPING_DATABASE_ID, config.SHOPPING_TITLE_PROP, title):
+            return False
+        self._req("POST", "/pages",
+                  parent={"database_id": config.dashify(config.SHOPPING_DATABASE_ID)},
+                  properties={
+                      config.SHOPPING_TITLE_PROP: self._title(title),
+                      config.SHOPPING_CHECK_PROP: self._check(False),
+                  })
+        return True
+
+    def shopping_items(self) -> list[dict]:
+        """All Shopping List rows as {"name": str, "checked": bool}."""
+        pages = self._query(config.SHOPPING_DATABASE_ID)
+        out = []
+        for p in pages:
+            pr = p["properties"]
+            name = _plain(pr.get(config.SHOPPING_TITLE_PROP, {}).get("title", []))
+            checked = bool(pr.get(config.SHOPPING_CHECK_PROP, {}).get("checkbox"))
+            out.append({"name": name, "checked": checked})
+        return out
+
     def _block_texts(self, page_id: str) -> set[str]:
         data = self._req("GET", f"/blocks/{config.dashify(page_id)}/children?page_size=100")
         out = set()

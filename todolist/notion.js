@@ -91,6 +91,30 @@ async function markDone(pageId) {
   });
 }
 
+async function appendBlocks(blockId, children) {
+  for (let i = 0; i < children.length; i += 100) { // Notion caps at 100 children/call
+    await req('PATCH', `/blocks/${dashify(blockId)}/children`, {
+      children: children.slice(i, i + 100),
+    });
+  }
+}
+
+const RICH_TEXT_LIMIT = 1900; // Notion's hard cap is 2000; leave headroom
+
+async function appendProgressNote(pageId, bullets) {
+  const children = bullets
+    .filter(b => b && b.trim())
+    .map(b => ({
+      object: 'block',
+      type: 'bulleted_list_item',
+      bulleted_list_item: {
+        rich_text: [{ type: 'text', text: { content: b.trim().slice(0, RICH_TEXT_LIMIT) } }],
+      },
+    }));
+  if (!children.length) return;
+  await appendBlocks(pageId, children);
+}
+
 function projectLabel(page) {
   const rel = page.properties[config.TASK_RELATION_PROP];
   const relPage = rel && rel.relation && rel.relation[0];
@@ -115,5 +139,7 @@ module.exports = {
   queryOpenTasks,
   getPageBlocks,
   markDone,
+  appendBlocks,
+  appendProgressNote,
   toTaskSummary,
 };

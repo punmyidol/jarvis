@@ -79,6 +79,29 @@ const ACTION_ITEMS_RE = /```action-items\s*\n([\s\S]*?)```/;
 const OPTIONS_FENCE_OPEN = '```options';
 const OPTIONS_FENCE_CLOSE = '```';
 const OPTIONS_RE = /```options\s*\n([\s\S]*?)```/;
+const PROGRESS_FENCE_OPEN = '```progress';
+const PROGRESS_FENCE_CLOSE = '```';
+const PROGRESS_RE = /```progress\s*\n([\s\S]*?)```/;
+// Model-independent backstops against a verbose or looping agent turning the
+// Notion task page into noise - the prompt asks for restraint, but these caps
+// hold regardless of whether it listens.
+const MAX_PROGRESS_BULLETS_PER_TURN = 3;
+const MAX_PROGRESS_BULLETS_PER_TASK = 25;
+const MIN_PROGRESS_BULLET_LEN = 8;
+
+const ENDSTATE_FENCE_OPEN = '```endstate';
+const ENDSTATE_FENCE_CLOSE = '```';
+const ENDSTATE_RE = /```endstate\s*\n([\s\S]*?)```/;
+// Deliberately not the bare word "done" - the prompt's own prose already says
+// "Done:" casually elsewhere, and this needs to be unambiguous to parse.
+const DONE_EVIDENCE_FENCE_OPEN = '```done-evidence';
+const DONE_EVIDENCE_FENCE_CLOSE = '```';
+const DONE_EVIDENCE_RE = /```done-evidence\s*\n([\s\S]*?)```/;
+// A mismatch auto-continues the same session (see runTurn's exit handler)
+// asking the model to reconcile, same mechanism as a real /reply - but bounded,
+// so a model that keeps getting the count wrong eventually surfaces to a human
+// instead of looping forever.
+const MAX_EVIDENCE_RECONCILE_ATTEMPTS = 2;
 
 // The prompt is the ONLY steering this loop has - there's no --system-prompt
 // and no --allowedTools on the spawn, so every behavioural rule lives here.
@@ -115,18 +138,23 @@ function buildPrompt(task, notes, instructions, hasExplicitWorkdir) {
     lines.push(
       '',
       'You were started in the Obsidian vault root, not a specific project ' +
-        'folder - look around it for context on this task before you start. ' +
-        'Context only: unless the task itself asks for a note, writing files ' +
-        'into the vault is at most an incidental byproduct and never the ' +
-        'deliverable. A new note is not a completed task.'
+        'folder - look around it for context on this task before you start, ' +
+        'that is always fine. Writing is different: do NOT create or edit any ' +
+        'file in the vault unless this task\'s own notes/instructions above ' +
+        'explicitly ask for a note to be saved, or the user explicitly asks ' +
+        'for one in this chat session. That is the default for every task - ' +
+        'a new note is never an incidental byproduct, and it is never a ' +
+        'completed task on its own.'
     );
   }
   lines.push(
     '',
     'Where things live: your personal information is kept in the Obsidian vault at ' +
-      `${config.VAULT} - check there if a task needs it. Tasks and deadlines are tracked ` +
-      'in Notion; the notes above are already pulled from there for this task, but you do ' +
-      'not have separate Notion access, so ask the user for anything else Notion-specific.',
+      `${config.VAULT} - check there if a task needs it (reading is always fine; see ` +
+      'above for when writing there is). Tasks and deadlines are tracked in Notion; the ' +
+      'notes above are already pulled from there for this task. You do not have a direct ' +
+      'Notion tool, and do not need one - ending a reply with a progress block (below) is ' +
+      'how what you did gets written onto this task\'s Notion page for you.',
     '',
     'This is a multi-turn chat session - respond in Markdown, since your ' +
       'replies are rendered as Markdown in a chat UI. The user is sitting in ' +
@@ -173,6 +201,18 @@ function buildPrompt(task, notes, instructions, hasExplicitWorkdir) {
       'user already has an account with (their own inbox, an existing ' +
       'subscription, a site they are already logged into).',
     '',
+    'Endstate: before taking any other action, end your very FIRST reply in this ' +
+      'conversation with a fenced block exactly like this, containing ONLY short, ' +
+      'concrete, checkable bullets describing what must be true when this task is ' +
+      `actually finished - nothing else inside the fence:\n\n${ENDSTATE_FENCE_OPEN}\n` +
+      `- <checkable condition 1>\n- <checkable condition 2>\n${ENDSTATE_FENCE_CLOSE}\n\n` +
+      'Usually 1-4 bullets - one per genuinely distinct, checkable outcome, each ' +
+      'concrete enough that you could later point at the exact evidence that satisfies ' +
+      'it. This is not a plan or a list of steps, and it does not replace acting in ' +
+      'later turns - it is the target end state you are committing to, checked against ' +
+      'your own done-evidence later. If the task has one single deliverable you cannot ' +
+      'usefully split up, use one bullet for it. Never omit this block on your first reply.',
+    '',
     'Action items: whenever this reply needs something from the user before you can ' +
       'continue (missing information, or something open-ended you need from them, with ' +
       'no fixed set of answers to offer) - not for a routine status update - end the ' +
@@ -192,6 +232,30 @@ function buildPrompt(task, notes, instructions, hasExplicitWorkdir) {
       'with free text instead of one of these, so the options are a shortcut, not a ' +
       'restriction - phrase them as the real answers, not generic placeholders.',
     '',
+    'Progress: by default, a meaningful step forward gets written onto this ' +
+      'task\'s own Notion page, not just left in this chat. Whenever a reply ' +
+      'reports real, concrete progress - something you actually created, ' +
+      'submitted, or found, or a real blocker you hit - end it with a fenced ' +
+      `block exactly like this:\n\n${PROGRESS_FENCE_OPEN}\n- <bullet 1>\n` +
+      `- <bullet 2>\n${PROGRESS_FENCE_CLOSE}\n\nRules for what belongs in it:`,
+    '- Relevance test (the one that matters most): a bullet is only valid if ' +
+      'it would plausibly belong in this exact task\'s own final Done: list - ' +
+      'i.e. it IS part of, or a direct step toward, completing the Task named ' +
+      'above. A true, specific, well-written fact that is not about this ' +
+      'task\'s own deliverable still does not belong here, no matter how ' +
+      'interesting - being concrete is not enough, it has to be on-topic too.',
+    '- Each bullet names a concrete result, artifact, or blocker (a thing you ' +
+      'created, a fact with its source, a specific obstacle) - never a ' +
+      'status-of-effort line.',
+    '- Never write bullets like "continuing to investigate", "making ' +
+      'progress", "still working on this", or "looked into X" with no result ' +
+      '- if there is nothing concrete yet, omit the block entirely.',
+    '- At most 3 bullets, each one short sentence - cut it down, don\'t pad ' +
+      'it out.',
+    '- Most turns should have none at all. Only a genuine milestone earns ' +
+      'one - this is not a routine status update, and it is not the ' +
+      'action-items/options block above.',
+    '',
     'Completion: this task is only marked done in Notion when you say so, so ' +
       'the bar is high. Emit the completion marker ONLY when every part of ' +
       'the task has actually been carried out by you.',
@@ -199,10 +263,13 @@ function buildPrompt(task, notes, instructions, hasExplicitWorkdir) {
       `you were blocked, or lacked access or credentials; the task asked you to ` +
       `DO something and you only researched, summarised or planned it; or you ` +
       `cannot verify the result.`,
-    'Immediately before the marker, write a short "Done:" list - one line per ' +
-      'thing you actually changed, created or sent, each with its concrete ' +
-      'evidence (file path, URL, Notion page, command output). If you cannot ' +
-      'fill that list, you are not done.',
+    'Immediately before the marker, write your evidence as a fenced block exactly like ' +
+      `this:\n\n${DONE_EVIDENCE_FENCE_OPEN}\n- <evidence for endstate item 1>\n` +
+      `- <evidence for endstate item 2>\n${DONE_EVIDENCE_FENCE_CLOSE}\n\nIt must have ` +
+      'exactly one line per bullet in the endstate checklist from your first reply, in ' +
+      'the same order - each line naming the concrete evidence for that specific item ' +
+      '(file path, URL, Notion page, command output), or saying plainly that the item ' +
+      'no longer applies and why. If you cannot fill in every line, you are not done.',
     'For anything done in the browser, the evidence is the end state you ' +
       'actually reached and saw - the resulting account, dashboard or ' +
       'confirmation page - never a note or summary describing one.',
@@ -214,6 +281,31 @@ function buildPrompt(task, notes, instructions, hasExplicitWorkdir) {
       `include it in an intermediate reply or while asking a question.`
   );
   return lines.join('\n');
+}
+
+// Mechanical, not a second LLM call: names exactly which checklist items look
+// uncovered (done-evidence is required to map 1:1 onto endstate, in order) and
+// asks the SAME session to reconcile before it's allowed to finish again.
+function buildReconcileMessage(entry) {
+  const endstate = entry.endstate || [];
+  const got = (entry.lastDoneEvidence || []).length;
+  const missing = endstate.slice(got);
+  return [
+    `Your last reply included ${DONE_MARKER}, but its ${DONE_EVIDENCE_FENCE_OPEN} block ` +
+      `had ${got} line(s) while the ${ENDSTATE_FENCE_OPEN} checklist you set at the start ` +
+      `of this task has ${endstate.length} item(s):`,
+    ...endstate.map((e, i) => `${i + 1}. ${e}`),
+    '',
+    missing.length
+      ? `Still missing evidence for: ${missing.map(e => `"${e}"`).join(', ')}.`
+      : 'The count is off even though nothing is obviously missing above - double check the mapping is 1:1 and in order.',
+    '',
+    'Before emitting the marker again: either finish whatever is still outstanding, then ' +
+      `re-emit a ${DONE_EVIDENCE_FENCE_OPEN} block with exactly one line per checklist ` +
+      'item above, in the same order - or, for any item that genuinely no longer applies, ' +
+      'say so explicitly on that item\'s line instead of omitting it. Do not emit the ' +
+      `marker until ${DONE_EVIDENCE_FENCE_OPEN} has exactly ${endstate.length} line(s).`,
+  ].join('\n');
 }
 
 const TURN_TEXT_CAP = 50000;
@@ -251,6 +343,28 @@ function parseStreamJson(id, entry, chunk) {
       let text = isDone
         ? rawText.replace(/^[ \t]*<!--TASK_COMPLETE-->[ \t]*\n?/gm, '').trimEnd()
         : rawText;
+      // Endstate is only ever read from the FIRST assistant turn - checked
+      // here, before this turn is pushed below, so entry.turns still only
+      // holds turns from strictly before this one.
+      const isFirstAssistantTurn = !entry.turns.some(t => t.role === 'assistant');
+      let endstateMatch, endstateItems;
+      if (isFirstAssistantTurn) {
+        endstateMatch = text.match(ENDSTATE_RE);
+        if (endstateMatch) {
+          endstateItems = endstateMatch[1]
+            .split('\n')
+            .map(l => l.trim().replace(/^[-*]\s*/, ''))
+            .filter(Boolean);
+        }
+      }
+      const doneEvidenceMatch = text.match(DONE_EVIDENCE_RE);
+      let doneEvidence;
+      if (doneEvidenceMatch) {
+        doneEvidence = doneEvidenceMatch[1]
+          .split('\n')
+          .map(l => l.trim().replace(/^[-*]\s*/, ''))
+          .filter(Boolean);
+      }
       const actionItemsMatch = text.match(ACTION_ITEMS_RE);
       const optionsMatch = text.match(OPTIONS_RE);
       let actionItems;
@@ -267,18 +381,43 @@ function parseStreamJson(id, entry, chunk) {
           .map(l => l.trim().replace(/^[-*]\s*/, ''))
           .filter(Boolean);
       }
-      // Either or both blocks may be present - cut at whichever starts first so
-      // trailing prose after a block never leaks back into `text`.
-      const cutIndex = [actionItemsMatch, optionsMatch]
+      // Left inline in `text` (not cut, unlike action-items/options below) so
+      // the chat transcript still shows it as-is - it renders as a plain
+      // fenced code block, which is fine for a first pass with no dedicated
+      // UI treatment yet.
+      const progressMatch = text.match(PROGRESS_RE);
+      let progress;
+      if (progressMatch) {
+        progress = progressMatch[1]
+          .split('\n')
+          .map(l => l.trim().replace(/^[-*]\s*/, ''))
+          .filter(l => l.length >= MIN_PROGRESS_BULLET_LEN)
+          .slice(0, MAX_PROGRESS_BULLETS_PER_TURN);
+      }
+      // Either/any of these blocks may be present - cut at whichever starts
+      // first so trailing prose after a block never leaks back into `text`.
+      const cutIndex = [actionItemsMatch, optionsMatch, endstateMatch, doneEvidenceMatch]
         .filter(Boolean)
         .reduce((min, m) => Math.min(min, m.index), Infinity);
       if (cutIndex !== Infinity) text = text.slice(0, cutIndex).trimEnd();
       const turn = { role: 'assistant', text: text.slice(0, TURN_TEXT_CAP), ts: Date.now() };
       if (actionItems && actionItems.length) turn.actionItems = actionItems;
       if (options && options.length) turn.options = options;
+      if (progress && progress.length) turn.progress = progress;
+      if (endstateItems && endstateItems.length) turn.endstate = endstateItems;
+      if (doneEvidence && doneEvidence.length) turn.doneEvidence = doneEvidence;
       entry.turns.push(turn);
       live.currentAssistantText = '';
       entry.awaitingInput = true;
+      if (isFirstAssistantTurn) {
+        if (endstateItems && endstateItems.length) {
+          entry.endstate = endstateItems;
+          entry.endstateMissing = false;
+        } else {
+          entry.endstate = [];
+          entry.endstateMissing = true;
+        }
+      }
       // The model - not the process exiting - decides "done". Only act on the
       // marker while this is still the entry actually tracked for `id`, so an
       // orphaned duplicate run (see the already-running guard in /start) can't
@@ -286,23 +425,63 @@ function parseStreamJson(id, entry, chunk) {
       // `markedDone` means Notion really says Done, so it is set in the
       // .then() - never up front. `markDonePending` is the separate in-flight
       // guard that stops a second marker from firing a duplicate PATCH.
-      if (isDone) entry.doneMarkerSeen = true;
-      if (isDone && !entry.markedDone && !entry.markDonePending && tracker.get(id) === entry) {
-        entry.markDonePending = true;
-        notion
-          .markDone(id)
-          .then(() => {
-            entry.markDonePending = false;
-            entry.markedDone = true;
-            entry.markDoneError = null;
-            saveState();
-          })
-          .catch(err => {
-            entry.markDonePending = false;
-            entry.markDoneError = err.message;
-            entry.tail = (entry.tail + `\n[mark-done failed] ${err.message}`).slice(-TAIL_BYTES);
+      if (isDone) {
+        const endstateCount = (entry.endstate || []).length;
+        // No endstate was ever captured (e.g. an older in-flight task, or the
+        // model skipped it) - nothing to check coverage against, so fall back
+        // to marker-only behavior rather than blocking on a gate with no
+        // ground truth.
+        const evidenceOk = endstateCount === 0 || (doneEvidence && doneEvidence.length === endstateCount);
+        if (evidenceOk) {
+          entry.doneMarkerSeen = true;
+          if (!entry.markedDone && !entry.markDonePending && tracker.get(id) === entry) {
+            entry.markDonePending = true;
+            notion
+              .markDone(id)
+              .then(() => {
+                entry.markDonePending = false;
+                entry.markedDone = true;
+                entry.markDoneError = null;
+                saveState();
+              })
+              .catch(err => {
+                entry.markDonePending = false;
+                entry.markDoneError = err.message;
+                entry.tail = (entry.tail + `\n[mark-done failed] ${err.message}`).slice(-TAIL_BYTES);
+                saveState();
+              });
+          }
+        } else {
+          // Evidence-coverage gate failed: the model claimed done but its
+          // done-evidence fence doesn't map 1:1 onto the endstate checklist it
+          // committed to on turn 1. Do NOT mark done, do NOT set
+          // doneMarkerSeen - runTurn's exit handler notices `pendingReconcile`
+          // once this process has actually exited, and auto-continues the SAME
+          // session asking it to reconcile, same as a real /reply. No human
+          // needed unless it happens repeatedly (see MAX_EVIDENCE_RECONCILE_ATTEMPTS).
+          entry.pendingReconcile = true;
+          entry.lastDoneEvidence = doneEvidence || [];
+        }
+      }
+      // Independent of markDone above - must never block or delay it, since
+      // the Done checkbox is the more load-bearing of the two. Dedupes
+      // against everything already filed for this task and enforces a hard
+      // per-task ceiling, so a verbose or looping agent can't turn the
+      // Notion page into noise even if it ignores the prompt's own restraint.
+      if (turn.progress && turn.progress.length && tracker.get(id) === entry) {
+        entry.filedProgress = entry.filedProgress || [];
+        const seen = new Set(entry.filedProgress.map(s => s.toLowerCase()));
+        const fresh = turn.progress.filter(b => !seen.has(b.toLowerCase()));
+        const budget = MAX_PROGRESS_BULLETS_PER_TASK - entry.filedProgress.length;
+        const toFile = fresh.slice(0, Math.max(0, budget));
+        if (toFile.length) {
+          entry.filedProgress.push(...toFile);
+          notion.appendProgressNote(id, toFile).catch(err => {
+            entry.progressNoteError = err.message;
+            entry.tail = (entry.tail + `\n[progress-note failed] ${err.message}`).slice(-TAIL_BYTES);
             saveState();
           });
+        }
       }
       saveState();
     }
@@ -397,6 +576,24 @@ function runTurn(id, entry, text, extraArgs) {
     logStream.end();
     liveProcesses.delete(id);
     saveState();
+
+    // Evidence-coverage gate follow-up: this turn claimed done but
+    // parseStreamJson rejected it (see there). Auto-continue the same
+    // conversation instead of leaving a human to notice - deferred to here
+    // (after liveProcesses.delete(id) above) so the new turn's own
+    // liveProcesses.set() below can't race with this process's own cleanup.
+    // Bounded so a model that keeps getting it wrong eventually surfaces to a
+    // person instead of looping forever.
+    if (!entry.userFinished && code === 0 && entry.pendingReconcile) {
+      entry.pendingReconcile = false;
+      entry.evidenceMismatchCount = (entry.evidenceMismatchCount || 0) + 1;
+      if (entry.evidenceMismatchCount <= MAX_EVIDENCE_RECONCILE_ATTEMPTS && entry.sessionId) {
+        runTurn(id, entry, buildReconcileMessage(entry), ['--resume', entry.sessionId]);
+      } else {
+        entry.evidenceGateFailed = true;
+        saveState();
+      }
+    }
   });
 }
 
@@ -421,9 +618,17 @@ async function startTask(id, instructions, workdir) {
     doneMarkerSeen: false,
     markDonePending: false,
     markDoneError: null,
+    filedProgress: [],
+    progressNoteError: null,
     userFinished: false,
     sessionId: null,
     cwd,
+    endstate: null,
+    endstateMissing: false,
+    pendingReconcile: false,
+    lastDoneEvidence: [],
+    evidenceMismatchCount: 0,
+    evidenceGateFailed: false,
   };
   tracker.set(id, entry);
   saveState();
@@ -497,7 +702,12 @@ const server = http.createServer(async (req, res) => {
           awaitingInput: Boolean(entry.awaitingInput),
           markedDone: Boolean(entry.markedDone),
           markDoneError: entry.markDoneError || null,
+          progressNoteError: entry.progressNoteError || null,
           userFinished: Boolean(entry.userFinished),
+          endstate: entry.endstate || null,
+          endstateMissing: Boolean(entry.endstateMissing),
+          lastDoneEvidence: entry.lastDoneEvidence || [],
+          evidenceGateFailed: Boolean(entry.evidenceGateFailed),
           // Ephemeral in-progress text - never written to state.json, just
           // the live accumulator for the "Claude is typing" preview.
           streamingText: live ? live.currentAssistantText : '',

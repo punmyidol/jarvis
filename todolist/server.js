@@ -69,10 +69,19 @@ function saveState() {
 loadState();
 
 const DONE_MARKER = '<!--TASK_COMPLETE-->';
+// The prompt asks for the marker alone on its own final line; match exactly
+// that, so a reply that merely quotes or discusses the marker mid-sentence
+// ("I won't emit <!--TASK_COMPLETE--> yet") can't complete the task.
+const DONE_MARKER_RE = /^[ \t]*<!--TASK_COMPLETE-->[ \t]*$/m;
 const ACTION_ITEMS_FENCE_OPEN = '```action-items';
 const ACTION_ITEMS_FENCE_CLOSE = '```';
 const ACTION_ITEMS_RE = /```action-items\s*\n([\s\S]*?)```/;
 
+// The prompt is the ONLY steering this loop has - there's no --system-prompt
+// and no --allowedTools on the spawn, so every behavioural rule lives here.
+// It is deliberately act-first: an earlier version framed the browser as a
+// fallback ("use it for anything behind a login"), and runs reliably answered
+// by web-searching and writing an Obsidian note instead of doing the task.
 function buildPrompt(task, notes, instructions, hasExplicitWorkdir) {
   const lines = [
     `Task: ${task.title}`,
@@ -83,12 +92,30 @@ function buildPrompt(task, notes, instructions, hasExplicitWorkdir) {
     '',
     'Additional instructions:',
     instructions && instructions.trim() ? instructions.trim() : 'none',
+    '',
+    'Your job is to CARRY THIS TASK OUT, not to research it. Researching a ' +
+      'task, summarising it, comparing the options, or writing up what someone ' +
+      'would have to do is NOT doing it, and does not complete it. If the task ' +
+      'is "sign up for X", the deliverable is an account that exists - not a ' +
+      'guide to signing up for X. Default to acting; look things up only as ' +
+      'much as you need to take the next real step.',
+    '',
+    'Browser: you are driving the user\'s own Chrome, already logged in to ' +
+      'their accounts, through the mcp__claude-in-chrome__* tools. That is your ' +
+      'primary way of working, not a fallback. Open the actual site and work ' +
+      'the actual flow. Do not decide a site is out of reach, and do not ' +
+      'substitute WebSearch/WebFetch reading-about-it for going there. If a ' +
+      'browser tool is refused for a site, say so plainly and name the site - ' +
+      'the user can grant it in the Chrome extension.',
   ];
   if (!hasExplicitWorkdir) {
     lines.push(
       '',
       'You were started in the Obsidian vault root, not a specific project ' +
-        'folder - locate the relevant project/files yourself before starting work.'
+        'folder - look around it for context on this task before you start. ' +
+        'Context only: unless the task itself asks for a note, writing files ' +
+        'into the vault is at most an incidental byproduct and never the ' +
+        'deliverable. A new note is not a completed task.'
     );
   }
   lines.push(
@@ -99,13 +126,18 @@ function buildPrompt(task, notes, instructions, hasExplicitWorkdir) {
       'not have separate Notion access, so ask the user for anything else Notion-specific.',
     '',
     'This is a multi-turn chat session - respond in Markdown, since your ' +
-      'replies are rendered as Markdown in a chat UI.',
+      'replies are rendered as Markdown in a chat UI. The user is sitting in ' +
+      'front of that UI, able to act on their machine right now.',
     '',
-    `Completion: this task is only marked done in Notion when you say so. Once ` +
-      `- and only once - you have genuinely finished the task, end your final reply ` +
-      `with a line containing exactly ${DONE_MARKER} and nothing else on that line. ` +
-      `Do not include it in an intermediate reply, while asking a clarifying question, ` +
-      `or before the work is actually done.`,
+    'Handing back: ending a reply hands control to the user, and their answer ' +
+      'resumes this same session. That is cheap and expected - use it. When a ' +
+      'step genuinely needs them in person (signing in, a password, a 2FA or ' +
+      'email code, a payment, an identity or eligibility decision), do all the ' +
+      'setup first - open the page, get to the exact screen where they act - ' +
+      'then end your turn with a short, specific ask: which tab is open, what ' +
+      'they should do in it, and to reply when done. Then stop and wait. Do ' +
+      'not batch several such asks to the end, do not guess past them, and do ' +
+      'not abandon the task because one exists.',
     '',
     'Action items: whenever this reply needs something from the user before you can ' +
       'continue (an answer, a decision, approval, or missing information) - not for a ' +
@@ -113,7 +145,28 @@ function buildPrompt(task, notes, instructions, hasExplicitWorkdir) {
       'containing ONLY short imperative bullets (a few words each), nothing else inside ' +
       `the fence:\n\n${ACTION_ITEMS_FENCE_OPEN}\n- <brief action 1>\n- <brief action 2>\n` +
       `${ACTION_ITEMS_FENCE_CLOSE}\n\nOmit this block entirely when you are not blocked ` +
-      'on the user.'
+      'on the user.',
+    '',
+    'Completion: this task is only marked done in Notion when you say so, so ' +
+      'the bar is high. Emit the completion marker ONLY when every part of ' +
+      'the task has actually been carried out by you.',
+    `Do NOT emit it if any of these is true: a step is left for the user to do; ` +
+      `you were blocked, or lacked access or credentials; the task asked you to ` +
+      `DO something and you only researched, summarised or planned it; or you ` +
+      `cannot verify the result.`,
+    'Immediately before the marker, write a short "Done:" list - one line per ' +
+      'thing you actually changed, created or sent, each with its concrete ' +
+      'evidence (file path, URL, Notion page, command output). If you cannot ' +
+      'fill that list, you are not done.',
+    'For anything done in the browser, the evidence is the end state you ' +
+      'actually reached and saw - the resulting account, dashboard or ' +
+      'confirmation page - never a note or summary describing one.',
+    'If you finished only part of it, say plainly what is left and stop, with ' +
+      'no marker. Leaving a task open is much better than marking one done ' +
+      'that is not.',
+    `When and only when all of that holds, end your final reply with a line ` +
+      `containing exactly ${DONE_MARKER} and nothing else on that line. Never ` +
+      `include it in an intermediate reply or while asking a question.`
   );
   return lines.join('\n');
 }
@@ -147,8 +200,12 @@ function parseStreamJson(id, entry, chunk) {
       // about to exit either way, one-shot by design.
       if (obj.session_id) entry.sessionId = obj.session_id;
       const rawText = typeof obj.result === 'string' ? obj.result : live.currentAssistantText;
-      const isDone = rawText.includes(DONE_MARKER);
-      let text = isDone ? rawText.split(DONE_MARKER).join('').trimEnd() : rawText;
+      const isDone = DONE_MARKER_RE.test(rawText);
+      // Strip only the marker line itself (the whole line, including its
+      // newline) rather than every occurrence of the string anywhere.
+      let text = isDone
+        ? rawText.replace(/^[ \t]*<!--TASK_COMPLETE-->[ \t]*\n?/gm, '').trimEnd()
+        : rawText;
       const actionItemsMatch = text.match(ACTION_ITEMS_RE);
       let actionItems;
       if (actionItemsMatch) {
@@ -167,12 +224,26 @@ function parseStreamJson(id, entry, chunk) {
       // marker while this is still the entry actually tracked for `id`, so an
       // orphaned duplicate run (see the already-running guard in /start) can't
       // mark a task done out from under the real one.
-      if (isDone && !entry.markedDone && tracker.get(id) === entry) {
-        entry.markedDone = true;
-        notion.markDone(id).catch(err => {
-          entry.tail = (entry.tail + `\n[mark-done failed] ${err.message}`).slice(-TAIL_BYTES);
-          saveState();
-        });
+      // `markedDone` means Notion really says Done, so it is set in the
+      // .then() - never up front. `markDonePending` is the separate in-flight
+      // guard that stops a second marker from firing a duplicate PATCH.
+      if (isDone) entry.doneMarkerSeen = true;
+      if (isDone && !entry.markedDone && !entry.markDonePending && tracker.get(id) === entry) {
+        entry.markDonePending = true;
+        notion
+          .markDone(id)
+          .then(() => {
+            entry.markDonePending = false;
+            entry.markedDone = true;
+            entry.markDoneError = null;
+            saveState();
+          })
+          .catch(err => {
+            entry.markDonePending = false;
+            entry.markDoneError = err.message;
+            entry.tail = (entry.tail + `\n[mark-done failed] ${err.message}`).slice(-TAIL_BYTES);
+            saveState();
+          });
       }
       saveState();
     }
@@ -203,6 +274,13 @@ function runTurn(id, entry, text, extraArgs) {
       '--include-partial-messages',
       '--verbose',
       '--permission-mode', 'bypassPermissions',
+      // Claude in Chrome. Verified to attach to a headless `claude -p` child
+      // (the init event lists mcp__claude-in-chrome__*, server 'connected'),
+      // so this is NOT interactive-only - don't drop it again. Without it the
+      // agent has literally zero browser tools: the only MCP server on this
+      // machine is project-scoped to the repo, and these runs use the vault as
+      // cwd, so they inherit nothing. Needs Chrome running with the extension.
+      '--chrome',
       ...extraArgs,
     ],
     { cwd: entry.cwd, stdio: ['ignore', 'pipe', 'pipe'] }
@@ -239,10 +317,11 @@ function runTurn(id, entry, text, extraArgs) {
     if (code !== 0) {
       entry.status = 'failed';
       entry.awaitingInput = false;
-    } else if (entry.markedDone) {
-      // The model said it's done, or the user clicked "Mark done" while this
-      // turn was in flight - either way the conversation is genuinely over,
-      // not just between turns.
+    } else if (entry.doneMarkerSeen) {
+      // The model emitted the completion marker - the conversation is
+      // genuinely over, not just between turns. Keyed on the marker, not on
+      // `markedDone`: that one waits for Notion's PATCH to resolve, which
+      // usually lands after this process has already exited.
       entry.status = 'finished';
       entry.awaitingInput = false;
     }
@@ -274,6 +353,9 @@ async function startTask(id, instructions, workdir) {
     turns: [],
     awaitingInput: false,
     markedDone: false,
+    doneMarkerSeen: false,
+    markDonePending: false,
+    markDoneError: null,
     sessionId: null,
     cwd,
   };
@@ -348,6 +430,7 @@ const server = http.createServer(async (req, res) => {
           turns: entry.turns || [],
           awaitingInput: Boolean(entry.awaitingInput),
           markedDone: Boolean(entry.markedDone),
+          markDoneError: entry.markDoneError || null,
           // Ephemeral in-progress text - never written to state.json, just
           // the live accumulator for the "Claude is typing" preview.
           streamingText: live ? live.currentAssistantText : '',
@@ -403,11 +486,18 @@ const server = http.createServer(async (req, res) => {
       try {
         await notion.markDone(id);
       } catch (e) {
+        const failed = tracker.get(id);
+        if (failed) {
+          failed.markDoneError = e.message;
+          saveState();
+        }
         return sendJson(res, 500, { ok: false, error: e.message });
       }
       const entry = tracker.get(id);
       if (entry) {
+        // Only reached if the PATCH above resolved.
         entry.markedDone = true;
+        entry.markDoneError = null;
         if (!liveProcesses.has(id)) {
           entry.status = 'finished';
           entry.awaitingInput = false;

@@ -25,6 +25,8 @@
   button.primary { background: #3a6bd6; color: #fff; }
   button.primary:hover { background: #4a7ae6; }
   button:disabled { opacity: 0.5; cursor: default; }
+  button.danger { background: #7a3535; color: #f5c9c9; margin-left: auto; }
+  button.danger:hover { background: #8a3f3f; }
 
   .card {
     background: #26262b; border: 1px solid #333338; border-radius: 10px;
@@ -90,7 +92,7 @@
   .reply-box.visible.active .hint { color: #7fa8f5; font-weight: 600; }
   .reply-box.visible.active textarea { border-color: #3a6bd6; }
   .reply-box:not(.active) textarea { opacity: 0.6; }
-  .actions { margin-top: 12px; }
+  .actions { margin-top: 12px; display: flex; align-items: center; gap: 8px; }
   #empty { color: #7a7a82; text-align: center; padding: 40px 0; }
   #searchRow { margin-bottom: 16px; }
   #searchInput {
@@ -169,6 +171,22 @@
     return new Date().toISOString().slice(0, 10);
   }
 
+  function formatDue(due) {
+    if (!due) return 'no due date';
+    if (/^\d{4}-\d{2}-\d{2}$/.test(due)) {
+      const [y, m, d] = due.split('-').map(Number);
+      return new Date(y, m - 1, d).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    }
+    const dt = new Date(due);
+    if (isNaN(dt)) return due;
+    const sameYear = dt.getFullYear() === new Date().getFullYear();
+    return dt.toLocaleString(undefined, {
+      month: 'short', day: 'numeric',
+      ...(sameYear ? {} : { year: 'numeric' }),
+      hour: 'numeric', minute: '2-digit',
+    });
+  }
+
   function fmtElapsed(startedAt) {
     const s = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
     const m = Math.floor(s / 60);
@@ -201,10 +219,9 @@
         ? `<span class="badge running">${lastTurnHasActionItems(st) ? 'needs input - see action items' : 'your turn - reply below'} (${fmtElapsed(st.startedAt)})</span>`
         : `<span class="badge running">Claude is working... (${fmtElapsed(st.startedAt)})</span>`;
     } else if (st.status === 'finished') {
-      // Only path to 'finished' now is the model's own completion marker
-      // (see doneMarkerSeen in server.js) - the old manual "Finish" route is
-      // gone, so there's no separate "closed by you" case to distinguish.
-      runBadge = `<span class="badge ended">session ended - Claude reported done</span>`;
+      runBadge = st.userFinished
+        ? `<span class="badge ended">session closed by you</span>`
+        : `<span class="badge ended">session ended - Claude reported done</span>`;
     } else if (st.status === 'failed') {
       runBadge = `<span class="badge failed">failed${st.exitCode != null ? ' (' + st.exitCode + ')' : ''}</span>`;
     } else if (st.status === 'interrupted') {
@@ -239,13 +256,14 @@
 
       const st = status[t.id];
       const sendDisabled = st && st.status === 'running';
+      const isRunning = Boolean(sendDisabled);
       const sendOpen = openSendBoxIds.has(t.id);
       const notesHtml = notesCache[t.id] || '<div class="notes">loading notes...</div>';
 
       card.innerHTML = `
         <div class="card-top">
           <div class="title">${escapeHtml(t.title)} <span class="status-badge">${statusBadgeHtml(t.id)}</span></div>
-          <div class="due ${overdue ? 'overdue' : ''}">${t.due_date || 'no due date'}</div>
+          <div class="due ${overdue ? 'overdue' : ''}">${formatDue(t.due_date)}</div>
         </div>
         <div class="sub">${t.project ? 'project: ' + escapeHtml(t.project) : 'no project'}</div>
         <div class="notes-container">${notesHtml}</div>
@@ -261,6 +279,7 @@
         <div class="actions">
           <button class="toggleSend" ${sendDisabled ? 'disabled' : ''}>Send to Claude</button>
           <button class="markDone" ${st && st.markedDone && !st.markDoneError ? 'disabled' : ''}>Mark done</button>
+          <button class="finishBtn danger" ${isRunning ? '' : 'hidden'}>Finish</button>
         </div>
         <div class="send-box${sendOpen ? ' open' : ''}">
           <label>Additional instructions (optional)</label>
@@ -322,6 +341,21 @@
           await pollStatus();
         } catch (e) {
           alert('Failed to mark done: ' + e.message);
+          btn.disabled = false;
+        }
+      });
+
+      card.querySelector('.finishBtn').addEventListener('click', async () => {
+        const btn = card.querySelector('.finishBtn');
+        btn.disabled = true;
+        try {
+          const r = await fetch(`/api/tasks/${encodeURIComponent(t.id)}/finish`, { method: 'POST' });
+          const data = await r.json();
+          if (!data.ok) throw new Error(data.error || 'failed to finish');
+          await pollStatus();
+        } catch (e) {
+          alert('Failed to finish: ' + e.message);
+        } finally {
           btn.disabled = false;
         }
       });
@@ -460,6 +494,9 @@
       // Stays clickable when the PATCH failed - that's exactly when a retry
       // is needed.
       if (markDoneBtn) markDoneBtn.disabled = Boolean(st && st.markedDone && !st.markDoneError);
+
+      const finishBtn = card.querySelector('.finishBtn');
+      if (finishBtn) finishBtn.hidden = !(st && st.status === 'running');
 
       const replyBox = card.querySelector('.reply-box');
       if (replyBox) {

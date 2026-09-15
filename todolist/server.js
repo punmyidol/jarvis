@@ -132,12 +132,41 @@ function buildPrompt(task, notes, instructions, hasExplicitWorkdir) {
     'Handing back: ending a reply hands control to the user, and their answer ' +
       'resumes this same session. That is cheap and expected - use it. When a ' +
       'step genuinely needs them in person (signing in, a password, a 2FA or ' +
-      'email code, a payment, an identity or eligibility decision), do all the ' +
-      'setup first - open the page, get to the exact screen where they act - ' +
-      'then end your turn with a short, specific ask: which tab is open, what ' +
-      'they should do in it, and to reply when done. Then stop and wait. Do ' +
-      'not batch several such asks to the end, do not guess past them, and do ' +
+      'email code, a payment, a signed or otherwise binding commitment ' +
+      '(including anything with a cancellation fee), an identity or ' +
+      'eligibility decision, or submitting a form or message that sends the ' +
+      'user\'s real personal info to a person or organization they don\'t ' +
+      'already have an account or relationship with), do all the setup first ' +
+      '- open the page, get to the exact screen where they act - then end ' +
+      'your turn with a short, specific ask: which tab is open, what they ' +
+      'should do in it, and to reply when done. Then stop and wait. Do not ' +
+      'batch several such asks to the end, do not guess past them, and do ' +
       'not abandon the task because one exists.',
+    '',
+    'Submitting to a real third party: filling a form out - including with the ' +
+      'user\'s real name, email, address, or other personal info pulled from ' +
+      'the vault - is normal setup and fine to do unprompted. But before you ' +
+      'actually submit one of the things listed above (a payment, a signed or ' +
+      'binding commitment, or a form/message that sends real personal info to ' +
+      'an org or person the user has no existing account or relationship ' +
+      'with), stop at the final submit/send step and tell the user exactly ' +
+      'what it is and what it is about to send, then wait for an explicit yes ' +
+      '- the same hand-back as above. A stated preference ("I like X") is not ' +
+      'itself authorization to submit anything on the user\'s behalf; only a ' +
+      'direct answer to that specific ask is. Do not wave this through because ' +
+      'it "is just a newsletter" or "is free" or "only asks for an email" - a ' +
+      'newsletter, waitlist, "get updates", or early-access signup on a site ' +
+      'the user has no prior account or relationship with is still handing a ' +
+      'stranger their real contact info, and needs the exact same stop as ' +
+      'anything else here; it is not an example of something to skip the stop ' +
+      'for. The test is narrow and mechanical, and always ask it explicitly ' +
+      'before any submit: does this specific org already have the user\'s ' +
+      'info on file from something set up before this task? If not, stop and ' +
+      'ask first, no matter how small the form looks. The only submissions ' +
+      'that skip this stop are ones carrying no personal info at all (a ' +
+      'search, filter, or availability form) or ones going to a place the ' +
+      'user already has an account with (their own inbox, an existing ' +
+      'subscription, a site they are already logged into).',
     '',
     'Action items: whenever this reply needs something from the user before you can ' +
       'continue (an answer, a decision, approval, or missing information) - not for a ' +
@@ -312,9 +341,15 @@ function runTurn(id, entry, text, extraArgs) {
     saveState();
   });
 
-  child.on('exit', code => {
+  child.on('exit', (code, signal) => {
     entry.exitCode = code;
-    if (code !== 0) {
+    if (entry.userFinished) {
+      // Manually ended via /finish - possibly by killing this very process
+      // (see that route) - so a non-zero/null exit code here must never read
+      // as 'failed'.
+      entry.status = 'finished';
+      entry.awaitingInput = false;
+    } else if (code !== 0) {
       entry.status = 'failed';
       entry.awaitingInput = false;
     } else if (entry.doneMarkerSeen) {
@@ -356,6 +391,7 @@ async function startTask(id, instructions, workdir) {
     doneMarkerSeen: false,
     markDonePending: false,
     markDoneError: null,
+    userFinished: false,
     sessionId: null,
     cwd,
   };
@@ -431,6 +467,7 @@ const server = http.createServer(async (req, res) => {
           awaitingInput: Boolean(entry.awaitingInput),
           markedDone: Boolean(entry.markedDone),
           markDoneError: entry.markDoneError || null,
+          userFinished: Boolean(entry.userFinished),
           // Ephemeral in-progress text - never written to state.json, just
           // the live accumulator for the "Claude is typing" preview.
           streamingText: live ? live.currentAssistantText : '',
@@ -504,6 +541,29 @@ const server = http.createServer(async (req, res) => {
         }
         saveState();
       }
+      return sendJson(res, 200, { ok: true });
+    }
+
+    m = url.match(/^\/api\/tasks\/([^/]+)\/finish$/);
+    if (m && req.method === 'POST') {
+      const id = decodeURIComponent(m[1]);
+      const entry = tracker.get(id);
+      if (!entry || entry.status !== 'running') {
+        return sendJson(res, 400, { ok: false, error: 'not running' });
+      }
+      // Manual kill-switch, independent of Notion: ends the chat session
+      // right now without touching the task's Done state (that's mark-done's
+      // job). If a turn is in flight, kill it - the exit handler above checks
+      // userFinished first, so the kill is never reported as 'failed'.
+      entry.userFinished = true;
+      const live = liveProcesses.get(id);
+      if (live) {
+        live.child.kill('SIGTERM');
+      } else {
+        entry.status = 'finished';
+        entry.awaitingInput = false;
+      }
+      saveState();
       return sendJson(res, 200, { ok: true });
     }
 

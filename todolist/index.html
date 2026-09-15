@@ -33,7 +33,9 @@
     padding: 16px 18px; margin-bottom: 12px;
   }
   .card.overdue { border-left: 3px solid #d97a7a; }
-  .card-top { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+  .card-top { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+  .card-top-left { display: flex; align-items: center; gap: 10px; min-width: 0; }
+  .markDoneCheckbox { width: 16px; height: 16px; flex-shrink: 0; cursor: pointer; }
   .title { font-weight: 600; font-size: 16px; }
   .due { font-size: 12px; color: #a8a8b0; white-space: nowrap; }
   .due.overdue { color: #e08a8a; }
@@ -78,6 +80,10 @@
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px;
     margin: 0 0 8px; padding: 8px;
   }
+  .turn.assistant .options-box { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .turn.assistant .options-box button { font-size: 12px; padding: 5px 10px; }
+  .turn.assistant .options-box button:first-child { background: #3a6bd6; color: #fff; }
+  .turn.assistant .options-box button:first-child:hover { background: #4a7ae6; }
 
   .send-box, .reply-box { margin-top: 12px; display: none; }
   .send-box.open, .reply-box.visible { display: block; }
@@ -139,6 +145,10 @@
   let searchQuery = '';
   let notesCache = {};
   let openSendBoxIds = new Set();
+  // `${taskId}:${turnTs}` keys for option-turns already given the one-time
+  // autofocus - so a pollStatus() re-render (every 2s) doesn't keep stealing
+  // focus back from the reply textarea once the user starts typing there.
+  let autoFocusedOptionTurns = new Set();
   // How many of a card's status.turns are already appended to its
   // .transcript-container - lets updateStatuses() append only new turns
   // instead of re-rendering the whole transcript (which would lose scroll
@@ -201,6 +211,13 @@
     return Boolean(last.role === 'assistant' && last.actionItems && last.actionItems.length);
   }
 
+  function lastTurnHasOptions(st) {
+    const turns = st && st.turns;
+    if (!turns || !turns.length) return false;
+    const last = turns[turns.length - 1];
+    return Boolean(last.role === 'assistant' && last.options && last.options.length);
+  }
+
   // Two independent things, deliberately never conflated: whether the CHAT
   // SESSION ended (st.status) and whether the TASK is done in Notion
   // (st.markedDone). Only the latter is allowed to look green - every card in
@@ -215,8 +232,11 @@
       : '';
     let runBadge = '';
     if (st.status === 'running') {
+      const waitingLabel = lastTurnHasOptions(st)
+        ? 'needs input - pick an option below'
+        : (lastTurnHasActionItems(st) ? 'needs input - see action items' : 'your turn - reply below');
       runBadge = st.awaitingInput
-        ? `<span class="badge running">${lastTurnHasActionItems(st) ? 'needs input - see action items' : 'your turn - reply below'} (${fmtElapsed(st.startedAt)})</span>`
+        ? `<span class="badge running">${waitingLabel} (${fmtElapsed(st.startedAt)})</span>`
         : `<span class="badge running">Claude is working... (${fmtElapsed(st.startedAt)})</span>`;
     } else if (st.status === 'finished') {
       runBadge = st.userFinished
@@ -262,7 +282,10 @@
 
       card.innerHTML = `
         <div class="card-top">
-          <div class="title">${escapeHtml(t.title)} <span class="status-badge">${statusBadgeHtml(t.id)}</span></div>
+          <div class="card-top-left">
+            <input type="checkbox" class="markDoneCheckbox" ${st && st.markedDone && !st.markDoneError ? 'checked disabled' : ''}>
+            <div class="title">${escapeHtml(t.title)} <span class="status-badge">${statusBadgeHtml(t.id)}</span></div>
+          </div>
           <div class="due ${overdue ? 'overdue' : ''}">${formatDue(t.due_date)}</div>
         </div>
         <div class="sub">${t.project ? 'project: ' + escapeHtml(t.project) : 'no project'}</div>
@@ -278,7 +301,6 @@
         </div>
         <div class="actions">
           <button class="toggleSend" ${sendDisabled ? 'disabled' : ''}>Send to Claude</button>
-          <button class="markDone" ${st && st.markedDone && !st.markDoneError ? 'disabled' : ''}>Mark done</button>
           <button class="finishBtn danger" ${isRunning ? '' : 'hidden'}>Finish</button>
         </div>
         <div class="send-box${sendOpen ? ' open' : ''}">
@@ -331,9 +353,9 @@
         }
       });
 
-      card.querySelector('.markDone').addEventListener('click', async () => {
-        const btn = card.querySelector('.markDone');
-        btn.disabled = true;
+      card.querySelector('.markDoneCheckbox').addEventListener('click', async (e) => {
+        const cb = e.currentTarget;
+        cb.disabled = true;
         try {
           const r = await fetch(`/api/tasks/${encodeURIComponent(t.id)}/mark-done`, { method: 'POST' });
           const data = await r.json();
@@ -341,7 +363,8 @@
           await pollStatus();
         } catch (e) {
           alert('Failed to mark done: ' + e.message);
-          btn.disabled = false;
+          cb.checked = false;
+          cb.disabled = false;
         }
       });
 
@@ -407,7 +430,29 @@
     return [bar, pad(' ' + header), bar, ...lines.map(l => pad(' ' + l)), bar].join('\n');
   }
 
-  function turnNode(turn) {
+  // Sends one quick-reply option exactly like a typed reply - same endpoint,
+  // same body shape - just skipping the textarea. `box` is the specific
+  // .options-box being clicked from, so only ITS buttons get the immediate
+  // disable-on-click (a stale options-box from an earlier turn is handled
+  // separately, by the every-tick gating in updateStatuses()).
+  async function sendOption(taskId, box, message) {
+    box.querySelectorAll('button').forEach(b => { b.disabled = true; });
+    try {
+      const r = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/reply`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message }),
+      });
+      const data = await r.json();
+      if (!data.ok) throw new Error(data.error || 'failed to send reply');
+      await pollStatus();
+    } catch (e) {
+      alert('Failed to send: ' + e.message);
+      box.querySelectorAll('button').forEach(b => { b.disabled = false; });
+    }
+  }
+
+  function turnNode(turn, taskId) {
     const el = document.createElement('div');
     if (turn.role === 'user') {
       el.className = 'turn user';
@@ -420,6 +465,17 @@
       }
       html += renderMarkdown(turn.text);
       el.innerHTML = html;
+      if (turn.options && turn.options.length) {
+        const box = document.createElement('div');
+        box.className = 'options-box';
+        for (const opt of turn.options) {
+          const btn = document.createElement('button');
+          btn.textContent = opt;
+          btn.addEventListener('click', () => sendOption(taskId, box, opt));
+          box.appendChild(btn);
+        }
+        el.appendChild(box);
+      }
     }
     return el;
   }
@@ -436,7 +492,7 @@
       const wasNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 40;
       const pending = container.querySelector('.turn.assistant.pending');
       for (let i = already; i < finalTurns.length; i++) {
-        const node = turnNode(finalTurns[i]);
+        const node = turnNode(finalTurns[i], id);
         if (pending) container.insertBefore(node, pending);
         else container.appendChild(node);
       }
@@ -505,10 +561,43 @@
         replyBox.classList.toggle('visible', visible);
         replyBox.classList.toggle('active', active);
         replyBox.querySelector('.hint').textContent = active
-          ? (lastTurnHasActionItems(st) ? 'Claude needs input - see action items above.' : 'Your turn - Claude is waiting for a reply.')
+          ? (lastTurnHasOptions(st)
+              ? 'Claude is waiting - pick an option above, or reply below.'
+              : (lastTurnHasActionItems(st) ? 'Claude needs input - see action items above.' : 'Your turn - Claude is waiting for a reply.'))
           : 'Claude is working...';
         replyBox.querySelector('textarea').disabled = !active;
         replyBox.querySelector('.reply-send').disabled = !active;
+      }
+
+      // Option buttons live inside already-appended turn nodes (never
+      // re-rendered - see updateTranscript's comment), so their
+      // enabled/focused state has to be patched here every tick instead:
+      // only the LAST turn's options should ever be clickable, and only
+      // while still awaiting input - a stale options-box from a turn the
+      // user already answered (or one superseded by a newer turn) must not
+      // stay live.
+      if (transcriptContainer) {
+        const assistantEls = Array.from(transcriptContainer.querySelectorAll('.turn.assistant:not(.pending)'));
+        const lastAssistantEl = assistantEls[assistantEls.length - 1];
+        const lastTurn = st && st.turns && st.turns[st.turns.length - 1];
+        const optionsActive = Boolean(
+          st && st.status === 'running' && st.awaitingInput &&
+          lastTurn && lastTurn.role === 'assistant' && lastTurn.options && lastTurn.options.length
+        );
+        transcriptContainer.querySelectorAll('.options-box').forEach(box => {
+          const isLast = box.closest('.turn') === lastAssistantEl;
+          box.querySelectorAll('button').forEach(b => { b.disabled = !(isLast && optionsActive); });
+        });
+        if (optionsActive && lastAssistantEl) {
+          const key = id + ':' + lastTurn.ts;
+          const textarea = card.querySelector('.reply-box textarea');
+          const userIsTyping = document.activeElement === textarea && textarea.value.trim().length > 0;
+          if (!autoFocusedOptionTurns.has(key) && !userIsTyping) {
+            const firstBtn = lastAssistantEl.querySelector('.options-box button');
+            if (firstBtn) firstBtn.focus();
+            autoFocusedOptionTurns.add(key);
+          }
+        }
       }
     }
   }

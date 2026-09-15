@@ -76,6 +76,9 @@ const DONE_MARKER_RE = /^[ \t]*<!--TASK_COMPLETE-->[ \t]*$/m;
 const ACTION_ITEMS_FENCE_OPEN = '```action-items';
 const ACTION_ITEMS_FENCE_CLOSE = '```';
 const ACTION_ITEMS_RE = /```action-items\s*\n([\s\S]*?)```/;
+const OPTIONS_FENCE_OPEN = '```options';
+const OPTIONS_FENCE_CLOSE = '```';
+const OPTIONS_RE = /```options\s*\n([\s\S]*?)```/;
 
 // The prompt is the ONLY steering this loop has - there's no --system-prompt
 // and no --allowedTools on the spawn, so every behavioural rule lives here.
@@ -150,8 +153,10 @@ function buildPrompt(task, notes, instructions, hasExplicitWorkdir) {
       'binding commitment, or a form/message that sends real personal info to ' +
       'an org or person the user has no existing account or relationship ' +
       'with), stop at the final submit/send step and tell the user exactly ' +
-      'what it is and what it is about to send, then wait for an explicit yes ' +
-      '- the same hand-back as above. A stated preference ("I like X") is not ' +
+      'what it is and what it is about to send, then end that reply with an ' +
+      'options block (see below) offering the real choices - normally ' +
+      '"Yes, submit it" and "No, don\'t" - and wait for their answer. A ' +
+      'stated preference ("I like X") is not ' +
       'itself authorization to submit anything on the user\'s behalf; only a ' +
       'direct answer to that specific ask is. Do not wave this through because ' +
       'it "is just a newsletter" or "is free" or "only asks for an email" - a ' +
@@ -169,12 +174,23 @@ function buildPrompt(task, notes, instructions, hasExplicitWorkdir) {
       'subscription, a site they are already logged into).',
     '',
     'Action items: whenever this reply needs something from the user before you can ' +
-      'continue (an answer, a decision, approval, or missing information) - not for a ' +
-      'routine status update - end the reply with a fenced block exactly like this, ' +
-      'containing ONLY short imperative bullets (a few words each), nothing else inside ' +
+      'continue (missing information, or something open-ended you need from them, with ' +
+      'no fixed set of answers to offer) - not for a routine status update - end the ' +
+      'reply with a fenced block exactly like this, containing ONLY short imperative ' +
+      'bullets (a few words each), nothing else inside ' +
       `the fence:\n\n${ACTION_ITEMS_FENCE_OPEN}\n- <brief action 1>\n- <brief action 2>\n` +
       `${ACTION_ITEMS_FENCE_CLOSE}\n\nOmit this block entirely when you are not blocked ` +
       'on the user.',
+    '',
+    'Options: whenever the reply is instead waiting on the user to pick from a small, ' +
+      'concrete set of choices - including a plain yes/no, like the submit-permission ' +
+      'stop above - end the reply with a fenced block exactly like this instead of ' +
+      'action-items, one short option per line (your own wording, a few words each), ' +
+      'the option you\'d actually pick first if you had to choose one, nothing else ' +
+      `inside the fence:\n\n${OPTIONS_FENCE_OPEN}\n<default/recommended option>\n` +
+      `<other option>\n${OPTIONS_FENCE_CLOSE}\n\n2-4 options. The user can still reply ` +
+      'with free text instead of one of these, so the options are a shortcut, not a ' +
+      'restriction - phrase them as the real answers, not generic placeholders.',
     '',
     'Completion: this task is only marked done in Notion when you say so, so ' +
       'the bar is high. Emit the completion marker ONLY when every part of ' +
@@ -236,16 +252,30 @@ function parseStreamJson(id, entry, chunk) {
         ? rawText.replace(/^[ \t]*<!--TASK_COMPLETE-->[ \t]*\n?/gm, '').trimEnd()
         : rawText;
       const actionItemsMatch = text.match(ACTION_ITEMS_RE);
+      const optionsMatch = text.match(OPTIONS_RE);
       let actionItems;
       if (actionItemsMatch) {
         actionItems = actionItemsMatch[1]
           .split('\n')
           .map(l => l.trim().replace(/^[-*]\s*/, ''))
           .filter(Boolean);
-        text = text.slice(0, actionItemsMatch.index).trimEnd();
       }
+      let options;
+      if (optionsMatch) {
+        options = optionsMatch[1]
+          .split('\n')
+          .map(l => l.trim().replace(/^[-*]\s*/, ''))
+          .filter(Boolean);
+      }
+      // Either or both blocks may be present - cut at whichever starts first so
+      // trailing prose after a block never leaks back into `text`.
+      const cutIndex = [actionItemsMatch, optionsMatch]
+        .filter(Boolean)
+        .reduce((min, m) => Math.min(min, m.index), Infinity);
+      if (cutIndex !== Infinity) text = text.slice(0, cutIndex).trimEnd();
       const turn = { role: 'assistant', text: text.slice(0, TURN_TEXT_CAP), ts: Date.now() };
       if (actionItems && actionItems.length) turn.actionItems = actionItems;
+      if (options && options.length) turn.options = options;
       entry.turns.push(turn);
       live.currentAssistantText = '';
       entry.awaitingInput = true;

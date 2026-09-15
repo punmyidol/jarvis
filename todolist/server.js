@@ -35,7 +35,7 @@ fs.mkdirSync(LOGS_DIR, { recursive: true });
 const taskCache = new Map();
 
 // id -> {status, startedAt, exitCode, tail, logFile, turns, awaitingInput,
-//        markedDone, sessionId, cwd, userFinished}
+//        markedDone, sessionId, cwd}
 const tracker = new Map();
 
 // id -> live process/session bookkeeping for whichever turn's process is
@@ -69,6 +69,9 @@ function saveState() {
 loadState();
 
 const DONE_MARKER = '<!--TASK_COMPLETE-->';
+const ACTION_ITEMS_FENCE_OPEN = '```action-items';
+const ACTION_ITEMS_FENCE_CLOSE = '```';
+const ACTION_ITEMS_RE = /```action-items\s*\n([\s\S]*?)```/;
 
 function buildPrompt(task, notes, instructions, hasExplicitWorkdir) {
   const lines = [
@@ -90,6 +93,11 @@ function buildPrompt(task, notes, instructions, hasExplicitWorkdir) {
   }
   lines.push(
     '',
+    'Where things live: your personal information is kept in the Obsidian vault at ' +
+      `${config.VAULT} - check there if a task needs it. Tasks and deadlines are tracked ` +
+      'in Notion; the notes above are already pulled from there for this task, but you do ' +
+      'not have separate Notion access, so ask the user for anything else Notion-specific.',
+    '',
     'This is a multi-turn chat session - respond in Markdown, since your ' +
       'replies are rendered as Markdown in a chat UI.',
     '',
@@ -97,7 +105,15 @@ function buildPrompt(task, notes, instructions, hasExplicitWorkdir) {
       `- and only once - you have genuinely finished the task, end your final reply ` +
       `with a line containing exactly ${DONE_MARKER} and nothing else on that line. ` +
       `Do not include it in an intermediate reply, while asking a clarifying question, ` +
-      `or before the work is actually done.`
+      `or before the work is actually done.`,
+    '',
+    'Action items: whenever this reply needs something from the user before you can ' +
+      'continue (an answer, a decision, approval, or missing information) - not for a ' +
+      'routine status update - end the reply with a fenced block exactly like this, ' +
+      'containing ONLY short imperative bullets (a few words each), nothing else inside ' +
+      `the fence:\n\n${ACTION_ITEMS_FENCE_OPEN}\n- <brief action 1>\n- <brief action 2>\n` +
+      `${ACTION_ITEMS_FENCE_CLOSE}\n\nOmit this block entirely when you are not blocked ` +
+      'on the user.'
   );
   return lines.join('\n');
 }
@@ -132,8 +148,19 @@ function parseStreamJson(id, entry, chunk) {
       if (obj.session_id) entry.sessionId = obj.session_id;
       const rawText = typeof obj.result === 'string' ? obj.result : live.currentAssistantText;
       const isDone = rawText.includes(DONE_MARKER);
-      const text = isDone ? rawText.split(DONE_MARKER).join('').trimEnd() : rawText;
-      entry.turns.push({ role: 'assistant', text: text.slice(0, TURN_TEXT_CAP), ts: Date.now() });
+      let text = isDone ? rawText.split(DONE_MARKER).join('').trimEnd() : rawText;
+      const actionItemsMatch = text.match(ACTION_ITEMS_RE);
+      let actionItems;
+      if (actionItemsMatch) {
+        actionItems = actionItemsMatch[1]
+          .split('\n')
+          .map(l => l.trim().replace(/^[-*]\s*/, ''))
+          .filter(Boolean);
+        text = text.slice(0, actionItemsMatch.index).trimEnd();
+      }
+      const turn = { role: 'assistant', text: text.slice(0, TURN_TEXT_CAP), ts: Date.now() };
+      if (actionItems && actionItems.length) turn.actionItems = actionItems;
+      entry.turns.push(turn);
       live.currentAssistantText = '';
       entry.awaitingInput = true;
       // The model - not the process exiting - decides "done". Only act on the
@@ -212,9 +239,10 @@ function runTurn(id, entry, text, extraArgs) {
     if (code !== 0) {
       entry.status = 'failed';
       entry.awaitingInput = false;
-    } else if (entry.markedDone || entry.userFinished) {
-      // The model said it's done, or the user clicked "Finish" - either way
-      // the conversation is genuinely over, not just between turns.
+    } else if (entry.markedDone) {
+      // The model said it's done, or the user clicked "Mark done" while this
+      // turn was in flight - either way the conversation is genuinely over,
+      // not just between turns.
       entry.status = 'finished';
       entry.awaitingInput = false;
     }
@@ -248,7 +276,6 @@ async function startTask(id, instructions, workdir) {
     markedDone: false,
     sessionId: null,
     cwd,
-    userFinished: false,
   };
   tracker.set(id, entry);
   saveState();
@@ -363,31 +390,16 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, { ok: true });
     }
 
-    m = url.match(/^\/api\/tasks\/([^/]+)\/finish$/);
-    if (m && req.method === 'POST') {
-      const id = decodeURIComponent(m[1]);
-      const entry = tracker.get(id);
-      if (!entry) {
-        return sendJson(res, 200, { ok: true });
-      }
-      entry.userFinished = true;
-      if (!liveProcesses.has(id)) {
-        // No turn in flight right now - finalize immediately. If a turn IS
-        // in flight, its own exit handler finalizes once it completes (see
-        // runTurn), so the current reply isn't cut off mid-turn.
-        entry.status = 'finished';
-        entry.awaitingInput = false;
-      }
-      saveState();
-      return sendJson(res, 200, { ok: true });
-    }
-
     m = url.match(/^\/api\/tasks\/([^/]+)\/mark-done$/);
     if (m && req.method === 'POST') {
       const id = decodeURIComponent(m[1]);
       // Manual fallback for when the model never emits its completion marker
       // (errored out, ran out of turns, task was actually finished by hand,
       // etc.) - works even for a task that was never run through this app.
+      // Also doubles as "I'm done with this conversation": if no turn is in
+      // flight, finalize status immediately; if one IS in flight, its own
+      // exit handler finalizes once it completes (see runTurn), so the
+      // current reply isn't cut off mid-turn.
       try {
         await notion.markDone(id);
       } catch (e) {
@@ -396,6 +408,10 @@ const server = http.createServer(async (req, res) => {
       const entry = tracker.get(id);
       if (entry) {
         entry.markedDone = true;
+        if (!liveProcesses.has(id)) {
+          entry.status = 'finished';
+          entry.awaitingInput = false;
+        }
         saveState();
       }
       return sendJson(res, 200, { ok: true });

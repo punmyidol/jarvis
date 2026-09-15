@@ -68,6 +68,11 @@
   .turn.assistant p, .turn.assistant ul, .turn.assistant ol { margin: 6px 0; padding-left: 20px; }
   .turn.assistant pre { background: #1a1a1d; padding: 8px; border-radius: 6px; overflow-x: auto; }
   .turn.assistant code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+  .turn.assistant pre.action-box {
+    background: #2a3a1d; border: 1px solid #4a6b2f; color: #d6f0c0;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px;
+    margin: 0 0 8px; padding: 8px;
+  }
 
   .send-box, .reply-box { margin-top: 12px; display: none; }
   .send-box.open, .reply-box.visible { display: block; }
@@ -148,6 +153,15 @@
     });
   }
 
+  function sendOnEnter(textarea, triggerBtn) {
+    textarea.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        if (!triggerBtn.disabled) triggerBtn.click();
+      }
+    });
+  }
+
   function todayStr() {
     return new Date().toISOString().slice(0, 10);
   }
@@ -159,6 +173,13 @@
     return `${m}:${String(r).padStart(2, '0')}`;
   }
 
+  function lastTurnHasActionItems(st) {
+    const turns = st && st.turns;
+    if (!turns || !turns.length) return false;
+    const last = turns[turns.length - 1];
+    return Boolean(last.role === 'assistant' && last.actionItems && last.actionItems.length);
+  }
+
   function statusBadgeHtml(id) {
     const st = status[id];
     if (!st) return '';
@@ -166,10 +187,8 @@
     let runBadge = '';
     if (st.status === 'running') {
       runBadge = st.awaitingInput
-        ? `<span class="badge running">your turn - reply below (${fmtElapsed(st.startedAt)})</span>`
+        ? `<span class="badge running">${lastTurnHasActionItems(st) ? 'needs input - see action items' : 'your turn - reply below'} (${fmtElapsed(st.startedAt)})</span>`
         : `<span class="badge running">Claude is working... (${fmtElapsed(st.startedAt)})</span>`;
-    } else if (st.status === 'finished') {
-      runBadge = `<span class="badge finished">finished</span>`;
     } else if (st.status === 'failed') {
       runBadge = `<span class="badge failed">failed${st.exitCode != null ? ' (' + st.exitCode + ')' : ''}</span>`;
     } else if (st.status === 'interrupted') {
@@ -221,7 +240,6 @@
           <textarea placeholder="Reply to Claude..."></textarea>
           <div class="row">
             <button class="reply-send primary">Send</button>
-            <button class="reply-finish">Finish</button>
           </div>
         </div>
         <div class="actions">
@@ -292,6 +310,9 @@
         }
       });
 
+      sendOnEnter(card.querySelector('.reply-box textarea'), card.querySelector('.reply-send'));
+      sendOnEnter(card.querySelector('.send-box textarea'), card.querySelector('.go'));
+
       card.querySelector('.reply-send').addEventListener('click', async () => {
         const textarea = card.querySelector('.reply-box textarea');
         const message = textarea.value;
@@ -315,17 +336,6 @@
         }
       });
 
-      card.querySelector('.reply-finish').addEventListener('click', async () => {
-        const finishBtn = card.querySelector('.reply-finish');
-        finishBtn.disabled = true;
-        try {
-          await fetch(`/api/tasks/${encodeURIComponent(t.id)}/finish`, { method: 'POST' });
-          await pollStatus();
-        } finally {
-          finishBtn.disabled = false;
-        }
-      });
-
       list.appendChild(card);
     }
   }
@@ -338,6 +348,15 @@
     }
   }
 
+  function buildActionBox(items) {
+    const header = 'YOUR ACTION ITEMS';
+    const lines = items.map(i => `- ${i}`);
+    const width = Math.max(header.length, ...lines.map(l => l.length)) + 2;
+    const bar = '+' + '-'.repeat(width) + '+';
+    const pad = s => '|' + s.padEnd(width) + '|';
+    return [bar, pad(' ' + header), bar, ...lines.map(l => pad(' ' + l)), bar].join('\n');
+  }
+
   function turnNode(turn) {
     const el = document.createElement('div');
     if (turn.role === 'user') {
@@ -345,7 +364,12 @@
       el.textContent = turn.text;
     } else {
       el.className = 'turn assistant';
-      el.innerHTML = renderMarkdown(turn.text);
+      let html = '';
+      if (turn.actionItems && turn.actionItems.length) {
+        html += `<pre class="action-box">${escapeHtml(buildActionBox(turn.actionItems))}</pre>`;
+      }
+      html += renderMarkdown(turn.text);
+      el.innerHTML = html;
     }
     return el;
   }
@@ -426,7 +450,7 @@
         replyBox.classList.toggle('visible', visible);
         replyBox.classList.toggle('active', active);
         replyBox.querySelector('.hint').textContent = active
-          ? 'Your turn - Claude is waiting for a reply.'
+          ? (lastTurnHasActionItems(st) ? 'Claude needs input - see action items above.' : 'Your turn - Claude is waiting for a reply.')
           : 'Claude is working...';
         replyBox.querySelector('textarea').disabled = !active;
         replyBox.querySelector('.reply-send').disabled = !active;

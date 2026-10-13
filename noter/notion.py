@@ -10,11 +10,15 @@ stable `2022-06-28` API version (`/v1/databases`, `/v1/pages`, `/v1/blocks`).
 """
 from __future__ import annotations
 
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
 import requests
 
 from . import config
 
 API = "https://api.notion.com/v1"
+TASK_TZ = ZoneInfo("America/Detroit")
 
 
 class NotionError(RuntimeError):
@@ -62,6 +66,17 @@ class Notion:
 
     @staticmethod
     def _date(s): return {"date": {"start": s}} if s else {"date": None}
+
+    @staticmethod
+    def _local_datetime_start(due: str, time: str) -> str:
+        """due (YYYY-MM-DD) + time (HH:MM), localized to TASK_TZ, DST-aware.
+
+        A naive `f"{due}T{time}:00"` has no UTC offset, so Notion's own UI and
+        other timezone-aware readers can reinterpret a midnight-adjacent time in
+        the wrong zone and roll the displayed calendar day back by one.
+        """
+        dt = datetime.strptime(f"{due}T{time}", "%Y-%m-%dT%H:%M").replace(tzinfo=TASK_TZ)
+        return dt.isoformat(timespec="seconds")
 
     @staticmethod
     def _check(b): return {"checkbox": bool(b)}
@@ -166,7 +181,7 @@ class Notion:
         # (e.g. 2026-08-05T07:30:00); dedup compares only the date part, so a time
         # never spawns a duplicate. No date -> no time attaches.
         time = (row.get("due_time") or "") if due else ""
-        start = f"{due}T{time}:00" if time else (due or "")
+        start = self._local_datetime_start(due, time) if time else (due or "")
         # The category LLM emits a short action name (clean_content) for every task; the
         # raw line lives in `content` and its date in the Due Date property. Dedup on the
         # SAME string we write as the title.
@@ -200,7 +215,7 @@ class Notion:
         # compares only the date part (see _find_page), so a time never spawns a dup.
         due = row.get("due_date") or ""
         time = (row.get("due_time") or "") if due else ""
-        when = (f"{due}T{time}:00" if time else due) or row.get("date") or ""
+        when = (self._local_datetime_start(due, time) if time else due) or row.get("date") or ""
         if self._title_exists(db, "Name", row["content"], "Date", when):
             return False
         self._req("POST", "/pages",

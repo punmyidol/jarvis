@@ -23,6 +23,8 @@ const { spawn, execFile } = require('child_process');
 
 const config = require('./config');
 const notion = require('./notion');
+const people = require('./people');
+const textSend = require('./textsend');
 
 const ROOT = __dirname;
 const PORT = config.PORT;
@@ -75,6 +77,14 @@ function loadState() {
         entry.awaitingInput = false;
         changed = true;
       }
+      for (const t of entry.pendingTexts || []) {
+        if (t.status === 'sending') {
+          // Died mid-send: it may or may not have gone out.
+          t.status = 'unconfirmed';
+          t.result = 'server restarted mid-send - check Messages';
+          changed = true;
+        }
+      }
       tracker.set(id, entry);
     }
     if (changed) saveState();
@@ -85,6 +95,16 @@ function saveState() {
   fs.writeFileSync(STATE_PATH, JSON.stringify(obj, null, 2));
 }
 loadState();
+
+// The ONLY way an entry ever reaches 'finished' - always from an explicit user
+// action (the Finish button, or the Notion mark-done checkbox), never
+// automatically. See the 'completed' status: the model reaching its own done
+// marker lands there instead, and stays there until this runs.
+function markFinished(entry) {
+  entry.status = 'finished';
+  entry.awaitingInput = false;
+  entry.completedAt = Date.now();
+}
 
 const DONE_MARKER = '<!--TASK_COMPLETE-->';
 // The prompt asks for the marker alone on its own final line; match exactly
@@ -134,7 +154,7 @@ const DONE_EVIDENCE_RE = /```done-evidence\s*\n([\s\S]*?)```/;
 const MAX_EVIDENCE_RECONCILE_ATTEMPTS = 2;
 
 // Payment approval hard-gate: enforced by a real PreToolUse hook (see
-// ensurePaymentGateHook/hooks/payment-gate.js), not by asking the model to
+// ensureGateHooks/hooks/payment-gate.js), not by asking the model to
 // stop - this is a backstop for when it doesn't. Detection runs over every
 // browser tool RESULT the agent sees (page text, form contents, etc.) as it
 // streams past in parseStreamJson, independent of anything the model itself
@@ -142,8 +162,10 @@ const MAX_EVIDENCE_RECONCILE_ATTEMPTS = 2;
 // LATER independent match re-arms it (and clears any earlier approval) - one
 // approval only ever covers the episode it was granted for. Starter list,
 // deliberately tuned toward over-triggering (a false positive just costs one
-// extra click) rather than missing a real payment.
-const PAYMENT_SIGNAL_RE = /\b(place order|complete purchase|complete your purchase|pay now|proceed to checkout|checkout|card number|cvv|cvc|expiration date|billing address|confirm and pay|buy now)\b/i;
+// extra click) rather than missing a real payment. Bare "checkout" is NOT in
+// it: it sits in the header of every store page (and matched unrelated pages,
+// e.g. a course site), arming the gate long before any actual payment step.
+const PAYMENT_SIGNAL_RE = /\b(place order|complete purchase|complete your purchase|pay now|proceed to checkout|card number|cvv|cvc|expiration date|billing address|confirm and pay|buy now)\b/i;
 // Only the tools that can actually submit/commit something - not the
 // read-only ones (read_page, get_page_text, find, navigate, tabs_*), which
 // can't pay for anything by themselves.
@@ -152,8 +174,47 @@ const PAYMENT_GATE_TOOLS = [
   'mcp__claude-in-chrome__form_input',
   'mcp__claude-in-chrome__javascript_tool',
   'mcp__claude-in-chrome__file_upload',
+  // Runs a sequence of clicks/typing in one call - ungated, it bypassed
+  // every tool above.
+  'mcp__claude-in-chrome__browser_batch',
 ];
 const PAYMENT_GATE_HOOK_PATH = path.join(ROOT, 'hooks', 'payment-gate.js');
+// Bash backstop for texting: denies direct Messages sends and agent calls to
+// the approve routes - see hooks/messages-gate.js.
+const MESSAGES_GATE_HOOK_PATH = path.join(ROOT, 'hooks', 'messages-gate.js');
+
+// Passed as --disallowedTools on every turn (deny rules hold even under
+// bypassPermissions). Gmail stays readable and can draft; anything that sends,
+// forwards or destroys mail is the user's to do. The joinscout Composio tools
+// are generic executors that can send from the SCOUT inbox, which must never
+// happen from this machine (see ~/.claude/CLAUDE.md).
+const BLOCKED_TOOLS = [
+  'mcp__claude_ai_Gmail__send_message',
+  'mcp__claude_ai_Gmail__reply',
+  'mcp__claude_ai_Gmail__forward',
+  'mcp__claude_ai_Gmail__trash_message',
+  'mcp__claude_ai_Gmail__trash_thread',
+  'mcp__claude_ai_Gmail__mark_message_spam',
+  'mcp__claude_ai_Gmail__mark_thread_spam',
+  'mcp__claude_ai_Gmail__delete_draft',
+  'mcp__claude_ai_Gmail__delete_label',
+  'mcp__claude_ai_joinscout_th_gmail_com_Email_reading_MCP__COMPOSIO_MULTI_EXECUTE_TOOL',
+  'mcp__claude_ai_joinscout_th_gmail_com_Email_reading_MCP__COMPOSIO_REMOTE_BASH_TOOL',
+  'mcp__claude_ai_joinscout_th_gmail_com_Email_reading_MCP__COMPOSIO_REMOTE_WORKBENCH',
+];
+
+// Spawned agents (and their hooks/scripts) authenticate with this, never with
+// TODOLIST_TOKEN - it only opens the routes an agent legitimately needs, so an
+// agent can't approve its own payment or text via the approve routes.
+// Regenerated per server start; children get it through their env.
+const AGENT_TOKEN = crypto.randomBytes(24).toString('hex');
+const AGENT_ROUTES = /^\/api\/tasks\/[^/]+\/(payment-gate-status|text-request)$/;
+
+// Texts an agent queued via messages.js send, waiting on the user's click.
+const MAX_PENDING_TEXTS_PER_TASK = 3;
+const MAX_TEXT_FILES = 10;
+const MAX_TEXT_FILE_BYTES = 100 * 1024 * 1024;
+const OUTGOING_DIR = path.join(ROOT, 'uploads', 'outgoing');
 
 // The prompt is the ONLY steering this loop has - there's no --system-prompt
 // and no --allowedTools on the spawn, so every behavioural rule lives here.
@@ -183,6 +244,19 @@ function buildSessionConventions({ allowProgressNotes, hasExplicitWorkdir }) {
       'substitute WebSearch/WebFetch reading-about-it for going there. If a ' +
       'browser tool is refused for a site, say so plainly and name the site - ' +
       'the user can grant it in the Chrome extension.',
+    '',
+    'You cannot see the user\'s own open Chrome tabs - your tabs are a ' +
+      'separate group that starts empty. If the request points at something ' +
+      'on their screen ("this page", "this guy", "this email"), say that you ' +
+      'can\'t see their tabs and ask them to paste the link or name.',
+    '',
+    'Single sign-on pages (U-M Okta, Google, Duo) usually go straight through ' +
+      'on the user\'s existing session - click Continue / Sign in and see ' +
+      'what happens before deciding you are blocked. Only when a username, ' +
+      'password or code field genuinely needs filling, leave that tab open on ' +
+      'it and hand back ("sign in in the open tab, then reply"), then carry ' +
+      'on with the task yourself once they reply. Never hand the task itself ' +
+      'back ("look it up and tell me") because of a sign-in.',
   ];
   if (!hasExplicitWorkdir) {
     lines.push(
@@ -209,6 +283,29 @@ function buildSessionConventions({ allowProgressNotes, hasExplicitWorkdir }) {
           'how what you did gets written onto this task\'s Notion page for you.'
         : ''),
     '',
+    'Email, texts, people and photos - use these to look things up for the task ' +
+      '(a code, a confirmation, what someone said, a number), not to browse:',
+    '- Email: the Gmail tools (mcp__claude_ai_Gmail__*) search and read the user\'s mail ' +
+      'and can create drafts. Sending, replying, forwarding and trashing are disabled - ' +
+      'when an email needs to go out, leave a draft and hand back.',
+    `- Texts (iMessage/SMS): \`node ${path.join(ROOT, 'messages.js')} recent [--days 2]\`, ` +
+      '`chat <who>`, `search <text> [--days 30]`.',
+    `- People: <who> can be a name, nickname or relation ("mom") - resolved from ` +
+      `${path.join(config.VAULT, 'Home', 'Family')}/ then Contacts ` +
+      `(\`node ${path.join(ROOT, 'people.js')} <who>\`). If it is ambiguous or has no ` +
+      'number, ask the user; never guess a recipient.',
+    `- Photos: \`node ${path.join(ROOT, 'photos.js')} search <text>\` (the Photos app's own ` +
+      'search) or `recent [--since YYYY-MM-DD]` exports candidate copies - look at them ' +
+      'with Read before choosing, and if more than one could be "the" photo, show your ' +
+      'pick and ask. "This photo" means an image attached in this chat, if there is one.',
+    `- Sending a text or file: ONLY via \`node ${path.join(ROOT, 'messages.js')} send <who> ` +
+      '[--file <path>]... [text]`. That never sends by itself - it queues the exact ' +
+      'message for the user, who sees it in the todolist UI and clicks Send or Reject. ' +
+      'After queueing, say what is waiting and end your turn; you will be told the ' +
+      'outcome in this conversation. Never try to send any other way (AppleScript, ' +
+      'Shortcuts, sms:/imessage: links, the browser).',
+    '- Do not quote private messages or emails back unless they are relevant to the task.',
+    '',
     'This is a multi-turn chat session - respond in Markdown, since your ' +
       'replies are rendered as Markdown in a chat UI. The user is sitting in ' +
       'front of that UI, able to act on their machine right now.',
@@ -225,7 +322,9 @@ function buildSessionConventions({ allowProgressNotes, hasExplicitWorkdir }) {
       'your turn with a short, specific ask: which tab is open, what they ' +
       'should do in it, and to reply when done. Then stop and wait. Do not ' +
       'batch several such asks to the end, do not guess past them, and do ' +
-      'not abandon the task because one exists.',
+      'not abandon the task because one exists. Do not call something the ' +
+      'user gave you (an email, name, ID, link) a placeholder, typo or fake ' +
+      'unless you have actually checked it - use it as given first.',
     '',
     'Submitting to a real third party: filling a form out - including with the ' +
       'user\'s real name, email, address, or other personal info pulled from ' +
@@ -301,6 +400,14 @@ function buildSessionConventions({ allowProgressNotes, hasExplicitWorkdir }) {
       `${WAITING_FENCE_CLOSE}\n\nFree text, a sentence or two, not a list. Omit this block ` +
       'entirely unless the task is genuinely stalled on something outside anyone\'s ' +
       'control right now.',
+    '',
+    'Attachments: never base64-encode a file and paste it into a tool call (e.g. the ' +
+      'Gmail create_draft `attachments[].content` field), and never read a ' +
+      'binary file\'s encoded bytes into context - not yourself, not through a subagent. ' +
+      'Hand-copying even a 100 KB file takes over an hour and silently corrupts it. ' +
+      'Instead, create the draft/message without the attachment and hand back with an ' +
+      'action item naming the exact file path for the user to attach themselves (or, if ' +
+      'the file is already in Google Drive, link it in the body).',
   );
   if (allowProgressNotes) {
     lines.push(
@@ -382,7 +489,9 @@ function buildSessionConventions({ allowProgressNotes, hasExplicitWorkdir }) {
       'exactly one line per bullet in the endstate checklist from your first reply, in ' +
       'the same order - each line naming the concrete evidence for that specific item ' +
       '(file path, URL, Notion page, command output), or saying plainly that the item ' +
-      'no longer applies and why. If you cannot fill in every line, you are not done.',
+      'no longer applies and why. If the user asked for more later in the chat, add a ' +
+      'line for each of those after the checklist lines. If you cannot fill in every ' +
+      'line, you are not done.',
     'For anything done in the browser, the evidence is the end state you ' +
       'actually reached and saw - the resulting account, dashboard or ' +
       'confirmation page - never a note or summary describing one.',
@@ -415,9 +524,9 @@ function buildPrompt(task, notes, instructions, hasExplicitWorkdir) {
 
 // Free-standing session, not tied to any Notion task - same conventions,
 // minus anything that writes onto a Notion page (there isn't one).
-function buildAdhocPrompt(name, instructions, hasExplicitWorkdir) {
+function buildAdhocPrompt(title, instructions, hasExplicitWorkdir) {
   const lines = [
-    `Session: ${name || '(untitled)'}`,
+    `Session: ${title || '(untitled)'}`,
     '',
     'Instructions:',
     instructions && instructions.trim() ? instructions.trim() : 'none',
@@ -443,13 +552,14 @@ function buildReconcileMessage(entry) {
     '',
     missing.length
       ? `Still missing evidence for: ${missing.map(e => `"${e}"`).join(', ')}.`
-      : 'The count is off even though nothing is obviously missing above - double check the mapping is 1:1 and in order.',
+      : 'Some checklist items have no evidence line.',
     '',
     'Before emitting the marker again: either finish whatever is still outstanding, then ' +
-      `re-emit a ${DONE_EVIDENCE_FENCE_OPEN} block with exactly one line per checklist ` +
+      `re-emit a ${DONE_EVIDENCE_FENCE_OPEN} block starting with one line per checklist ` +
       'item above, in the same order - or, for any item that genuinely no longer applies, ' +
-      'say so explicitly on that item\'s line instead of omitting it. Do not emit the ' +
-      `marker until ${DONE_EVIDENCE_FENCE_OPEN} has exactly ${endstate.length} line(s).`,
+      'say so explicitly on that item\'s line instead of omitting it. Evidence for anything ' +
+      'the user asked for later goes on extra lines after those. Do not emit the marker ' +
+      `until ${DONE_EVIDENCE_FENCE_OPEN} has at least ${endstate.length} line(s).`,
   ].join('\n');
 }
 
@@ -466,6 +576,18 @@ function extractToolResultText(content) {
       .join('\n');
   }
   return '';
+}
+
+// Cuts a reply's text at whichever structured block starts first (action-items,
+// options, endstate, done-evidence, waiting) so trailing prose after a block
+// never leaks back into the displayed text. progress/create-task are left
+// inline on purpose (see parseStreamJson).
+function cutFences(text) {
+  const cutIndex = [ACTION_ITEMS_RE, OPTIONS_RE, ENDSTATE_RE, DONE_EVIDENCE_RE, WAITING_RE]
+    .map(re => text.match(re))
+    .filter(Boolean)
+    .reduce((min, m) => Math.min(min, m.index), Infinity);
+  return cutIndex === Infinity ? text : text.slice(0, cutIndex).trimEnd();
 }
 
 // Parses one turn's stdout as newline-delimited stream-json events, kept
@@ -489,6 +611,13 @@ function parseStreamJson(id, entry, chunk) {
     }
     if (obj.type === 'stream_event' && obj.event && obj.event.type === 'content_block_delta' && obj.event.delta && obj.event.delta.type === 'text_delta') {
       live.currentAssistantText += obj.event.delta.text;
+    } else if (obj.type === 'system' && obj.subtype === 'init') {
+      // The CLI assigns the session id immediately, before any assistant
+      // output - capture it here too (not just on `result` below) so a turn
+      // interrupted before it ever finishes still leaves something `--resume`
+      // can use (otherwise entry.sessionId stays null forever and /reply
+      // refuses to resume it - see the 'no session to resume yet' error).
+      if (obj.session_id) entry.sessionId = obj.session_id;
     } else if (obj.type === 'result') {
       // Needed to chain the next turn onto this same conversation via
       // `--resume` (see runTurn) - the process that produced this event is
@@ -501,13 +630,19 @@ function parseStreamJson(id, entry, chunk) {
       let text = isDone
         ? rawText.replace(/^[ \t]*<!--TASK_COMPLETE-->[ \t]*\n?/gm, '').trimEnd()
         : rawText;
+      // `obj.result` is only the turn's LAST text block. Every text block the
+      // turn produced (see the 'assistant' branch below) is kept too, because
+      // the endstate fence is written in the FIRST block, before any tool
+      // calls - reading it from `result` alone meant it was never captured.
+      const textBlocks = live.textBlocks || [];
+      const allText = textBlocks.length ? textBlocks.join('\n\n') : text;
       // Endstate is only ever read from the FIRST assistant turn - checked
       // here, before this turn is pushed below, so entry.turns still only
       // holds turns from strictly before this one.
       const isFirstAssistantTurn = !entry.turns.some(t => t.role === 'assistant');
       let endstateMatch, endstateItems;
       if (isFirstAssistantTurn) {
-        endstateMatch = text.match(ENDSTATE_RE);
+        endstateMatch = allText.match(ENDSTATE_RE);
         if (endstateMatch) {
           endstateItems = endstateMatch[1]
             .split('\n')
@@ -569,10 +704,19 @@ function parseStreamJson(id, entry, chunk) {
       const waitingReason = waitingMatch ? waitingMatch[1].trim() : undefined;
       // Either/any of these blocks may be present - cut at whichever starts
       // first so trailing prose after a block never leaks back into `text`.
-      const cutIndex = [actionItemsMatch, optionsMatch, endstateMatch, doneEvidenceMatch, waitingMatch]
-        .filter(Boolean)
-        .reduce((min, m) => Math.min(min, m.index), Infinity);
-      if (cutIndex !== Infinity) text = text.slice(0, cutIndex).trimEnd();
+      text = cutFences(text);
+      // The last block can be nothing but a fence (e.g. just an action-items
+      // block, with the explanation in an earlier block) - show the last
+      // earlier block with real prose instead of an empty bubble.
+      if (!text.trim()) {
+        for (let i = textBlocks.length - 1; i >= 0; i--) {
+          const prev = cutFences(textBlocks[i].replace(/^[ \t]*<!--TASK_COMPLETE-->[ \t]*\n?/gm, '')).trim();
+          if (prev) {
+            text = prev;
+            break;
+          }
+        }
+      }
       const turn = { role: 'assistant', text: text.slice(0, TURN_TEXT_CAP), ts: Date.now() };
       if (actionItems && actionItems.length) turn.actionItems = actionItems;
       if (options && options.length) turn.options = options;
@@ -583,6 +727,7 @@ function parseStreamJson(id, entry, chunk) {
       if (waitingReason) turn.waiting = waitingReason;
       entry.turns.push(turn);
       live.currentAssistantText = '';
+      live.textBlocks = [];
       entry.awaitingInput = true;
       if (isFirstAssistantTurn) {
         if (endstateItems && endstateItems.length) {
@@ -606,7 +751,11 @@ function parseStreamJson(id, entry, chunk) {
         // model skipped it) - nothing to check coverage against, so fall back
         // to marker-only behavior rather than blocking on a gate with no
         // ground truth.
-        const evidenceOk = endstateCount === 0 || (doneEvidence && doneEvidence.length === endstateCount);
+        // At least one line per checklist item, not exactly: in a multi-turn
+        // session the user often adds asks after turn 1 ("also write it to
+        // Notion"), and evidence for those comes after the checklist's lines -
+        // that's not a coverage gap.
+        const evidenceOk = endstateCount === 0 || (doneEvidence && doneEvidence.length >= endstateCount);
         if (evidenceOk) {
           entry.doneMarkerSeen = true;
         } else {
@@ -683,12 +832,17 @@ function parseStreamJson(id, entry, chunk) {
       // Payment-gate detection, part 1: remember which tool name each
       // tool_use id belongs to, so when its RESULT arrives (below) the
       // classifier can report which tool produced the flagged content.
+      // Also collects every text block of the turn for the `result` branch
+      // above (endstate lives in the first one, not in `result`).
       const content = obj.message && obj.message.content;
       if (Array.isArray(content)) {
         for (const c of content) {
           if (c && c.type === 'tool_use' && c.id) {
             live.toolNameByUseId = live.toolNameByUseId || {};
             live.toolNameByUseId[c.id] = c.name;
+          } else if (c && c.type === 'text' && typeof c.text === 'string' && c.text.trim()) {
+            live.textBlocks = live.textBlocks || [];
+            live.textBlocks.push(c.text);
           }
         }
       }
@@ -706,7 +860,11 @@ function parseStreamJson(id, entry, chunk) {
             const toolName = (live.toolNameByUseId || {})[c.tool_use_id] || 'unknown-tool';
             const resultText = extractToolResultText(c.content);
             const signal = resultText && resultText.match(PAYMENT_SIGNAL_RE);
-            if (signal) {
+            // An approval covers the rest of the turn it was granted for (the
+            // turn the user resumed after clicking Approve) - re-arming on
+            // every page read in that same checkout flow would undo the
+            // approval immediately. It's cleared when the turn exits instead.
+            if (signal && !entry.paymentApproved) {
               entry.paymentGateArmed = true;
               entry.paymentApproved = false;
               entry.paymentGateReason = `via ${toolName}: "...${signal[0]}..."`;
@@ -727,10 +885,23 @@ function parseStreamJson(id, entry, chunk) {
 // for every follow-up - same wiring either way, only the CLI args differ.
 // `--permission-mode` has to be repeated on every resumed invocation too:
 // it's not remembered from the previous turn's process.
-function runTurn(id, entry, text, extraArgs) {
-  entry.turns.push({ role: 'user', text, ts: Date.now() });
+function runTurn(id, entry, text, extraArgs, displayText, images) {
+  // `text` is the full prompt sent to (and resumed onto with) Claude - on the
+  // first turn that includes all the injected Task/Notes/session-convention
+  // boilerplate (see buildPrompt/buildAdhocPrompt), which is the app talking
+  // to Claude, not the user. `displayText`, when given, is what the user
+  // actually typed - the UI renders that instead (see index.html's turnNode).
+  // Every other call site (replies, the reconcile auto-continue, the queued-
+  // message flush) omits it since there `text` already IS verbatim what was
+  // typed/queued.
+  entry.turns.push({ role: 'user', text, ...(displayText != null ? { displayText } : {}), ...(images && images.length ? { images } : {}), ts: Date.now() });
   entry.status = 'running';
   entry.awaitingInput = false;
+  // Each turn decides its own end state: 'completed' only when THIS turn
+  // emitted the marker. Without this reset, one early "done" left every later
+  // turn (including ones asking the user to pick an option) stuck showing
+  // "Claude reported done".
+  entry.doneMarkerSeen = false;
   saveState();
 
   const logStream = fs.createWriteStream(entry.logFile, { flags: 'a' });
@@ -756,6 +927,7 @@ function runTurn(id, entry, text, extraArgs) {
       // machine is project-scoped to the repo, and these runs use the vault as
       // cwd, so they inherit nothing. Needs Chrome running with the extension.
       '--chrome',
+      '--disallowedTools', BLOCKED_TOOLS.join(','),
       ...extraArgs,
     ],
     {
@@ -763,12 +935,16 @@ function runTurn(id, entry, text, extraArgs) {
       stdio: ['ignore', 'pipe', 'pipe'],
       // Lets the payment-gate PreToolUse hook (a subprocess of this `claude`
       // process, so it inherits this env) identify which task/server to call
-      // back into - see ensurePaymentGateHook / hooks/payment-gate.js.
-      env: { ...process.env, TODOLIST_TASK_ID: id, TODOLIST_PORT: String(config.PORT) },
+      // back into, and authenticate to it (every /api/* route requires the
+      // token once TODOLIST_TOKEN is set - without it the hook got 401 and
+      // failed open) - see ensureGateHooks / hooks/payment-gate.js. The
+      // agent-scoped AGENT_TOKEN, not TODOLIST_TOKEN: the agent's own Bash
+      // sees this env too, and must not be able to hit the approve routes.
+      env: { ...process.env, TODOLIST_TASK_ID: id, TODOLIST_PORT: String(config.PORT), TODOLIST_TOKEN: AGENT_TOKEN },
     }
   );
 
-  liveProcesses.set(id, { child, stdoutBuffer: '', currentAssistantText: '' });
+  liveProcesses.set(id, { child, stdoutBuffer: '', currentAssistantText: '', textBlocks: [] });
 
   // Raw tail/log mechanism: every raw byte of stdout+stderr, as stream-json
   // NDJSON lines rather than plain prose - an expected side effect of using
@@ -796,6 +972,13 @@ function runTurn(id, entry, text, extraArgs) {
 
   child.on('exit', (code, signal) => {
     entry.exitCode = code;
+    // One approval covers one turn's payment episode: whatever happens next
+    // needs a fresh detection and a fresh approval.
+    if (entry.paymentApproved) {
+      entry.paymentApproved = false;
+      entry.paymentGateArmed = false;
+      entry.paymentGateReason = null;
+    }
     // Must read before liveProcesses.delete() below - only source of any
     // partial assistant text this killed turn produced (see interrupt below).
     const live = liveProcesses.get(id);
@@ -805,8 +988,7 @@ function runTurn(id, entry, text, extraArgs) {
       // Manually ended - either by /mark-done killing a still-running task,
       // or (formerly) /finish - so a non-zero/null exit code here must never
       // read as 'failed'.
-      entry.status = 'finished';
-      entry.awaitingInput = false;
+      markFinished(entry);
     } else if (wasInterrupted) {
       // User hit Interrupt: stop THIS turn, not the conversation - unlike
       // sessionEndedByUser above, this always comes back to 'running' so a
@@ -828,13 +1010,11 @@ function runTurn(id, entry, text, extraArgs) {
       entry.status = 'failed';
       entry.awaitingInput = false;
     } else if (entry.doneMarkerSeen) {
-      // The model emitted the completion marker - the conversation is
-      // genuinely over, not just between turns. Keyed on the marker, not on
-      // `markedDone`: the model's marker never touches Notion itself (see
-      // parseStreamJson) - only the user's own mark-done click does that,
-      // independently of whether this chat session has ended.
-      entry.status = 'finished';
-      entry.awaitingInput = false;
+      // The model emitted the completion marker - but that's the model's
+      // opinion, not the user's. Land in 'completed' (still replyable, same as
+      // 'running') and wait for the user to actually press Finish/mark-done
+      // (see markFinished) - never auto-transition to 'finished' from here.
+      entry.status = 'completed';
     } else if (entry.pendingWaiting) {
       // Model ended this reply with a `waiting` block: this task is blocked
       // on something external for now, not on the user - see parseStreamJson.
@@ -859,7 +1039,7 @@ function runTurn(id, entry, text, extraArgs) {
     liveProcesses.delete(id);
     saveState();
 
-    const conversationStillOpen = entry.status === 'running' || entry.status === 'waiting';
+    const conversationStillOpen = entry.status === 'running' || entry.status === 'waiting' || entry.status === 'completed';
 
     // Evidence-coverage gate follow-up: this turn claimed done but
     // parseStreamJson rejected it (see there). Auto-continue the same
@@ -887,8 +1067,10 @@ function runTurn(id, entry, text, extraArgs) {
     // typed something in while busy (see /reply's `busy` branch).
     if (conversationStillOpen && entry.awaitingInput && entry.queuedMessages && entry.queuedMessages.length && entry.sessionId) {
       const merged = entry.queuedMessages.join('\n\n');
+      const queuedImages = entry.queuedImages || [];
       entry.queuedMessages = [];
-      runTurn(id, entry, merged, ['--resume', entry.sessionId]);
+      entry.queuedImages = [];
+      runTurn(id, entry, merged, ['--resume', entry.sessionId], undefined, queuedImages);
     }
   });
 }
@@ -906,7 +1088,9 @@ function runTurn(id, entry, text, extraArgs) {
 // anything real until it has been smoke-tested end-to-end (a staged fake
 // checkout page, confirming an actual denial in the raw log) - a
 // misconfigured hook fails OPEN and silent, which is worse than no gate.
-function ensurePaymentGateHook(cwd) {
+//
+// Also registers hooks/messages-gate.js on Bash (same file, same rules).
+function ensureGateHooks(cwd) {
   const settingsDir = path.join(cwd, '.claude');
   const settingsPath = path.join(settingsDir, 'settings.json');
   let settings = {};
@@ -915,21 +1099,25 @@ function ensurePaymentGateHook(cwd) {
   } catch {}
   settings.hooks = settings.hooks || {};
   settings.hooks.PreToolUse = settings.hooks.PreToolUse || [];
-  const command = `node ${JSON.stringify(PAYMENT_GATE_HOOK_PATH)}`;
-  const missing = PAYMENT_GATE_TOOLS.filter(toolName =>
+  const paymentCommand = `node ${JSON.stringify(PAYMENT_GATE_HOOK_PATH)}`;
+  const wanted = [
+    ...PAYMENT_GATE_TOOLS.map(matcher => ({ matcher, command: paymentCommand })),
+    { matcher: 'Bash', command: `node ${JSON.stringify(MESSAGES_GATE_HOOK_PATH)}` },
+  ];
+  const missing = wanted.filter(w =>
     !settings.hooks.PreToolUse.some(
-      e => e.matcher === toolName && (e.hooks || []).some(h => h.command === command)
+      e => e.matcher === w.matcher && (e.hooks || []).some(h => h.command === w.command)
     )
   );
   if (!missing.length) return;
-  for (const toolName of missing) {
-    settings.hooks.PreToolUse.push({ matcher: toolName, hooks: [{ type: 'command', command }] });
+  for (const { matcher, command } of missing) {
+    settings.hooks.PreToolUse.push({ matcher, hooks: [{ type: 'command', command }] });
   }
   try {
     fs.mkdirSync(settingsDir, { recursive: true });
     fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
   } catch (err) {
-    console.error(`[payment-gate] failed to write ${settingsPath}: ${err.message}`);
+    console.error(`[gate-hooks] failed to write ${settingsPath}: ${err.message}`);
   }
 }
 
@@ -984,27 +1172,56 @@ async function startTask(id, instructions, workdir, model) {
     paymentGateArmed: false,
     paymentGateReason: null,
     paymentApproved: false,
+    pendingTexts: [],
   };
   tracker.set(id, entry);
   saveState();
 
-  ensurePaymentGateHook(cwd);
-  runTurn(id, entry, prompt, []);
+  ensureGateHooks(cwd);
+  runTurn(id, entry, prompt, [], instructions && instructions.trim() ? instructions.trim() : '(no additional instructions)');
+}
+
+// Names an adhoc session when the user left "Name" blank, by parsing what was
+// typed - deliberately NOT a Claude call, so starting a session never waits on
+// a second model round-trip. First non-empty line, cut at the first sentence
+// end when that still leaves >= 3 words, capped on a word boundary. Never the
+// raw internal id.
+function titleFromInput(text, max = 60) {
+  const firstLine = (text || '').split('\n').map(l => l.trim()).find(Boolean) || '';
+  let title = firstLine.replace(/\s+/g, ' ');
+  const sentenceEnd = title.search(/[.?!](\s|$)/);
+  if (sentenceEnd > 0) {
+    const firstSentence = title.slice(0, sentenceEnd);
+    if (firstSentence.split(' ').length >= 3) title = firstSentence;
+  }
+  title = title.replace(/[\s.,;:!?-]+$/, '');
+  if (title.length > max) {
+    const cut = title.slice(0, max);
+    const lastSpace = cut.lastIndexOf(' ');
+    title = (lastSpace > max / 2 ? cut.slice(0, lastSpace) : cut).trimEnd() + '…';
+  }
+  return title || '(untitled)';
 }
 
 // Free-standing session, not tied to a Notion task - see buildAdhocPrompt.
 // Id is prefixed so it can never collide with a Notion page id or an
 // `ext:<sessionId>` adopted id (see adoptExternalSession).
-function startAdhocSession(name, instructions, workdir, model) {
+function startAdhocSession(name, instructions, workdir, model, images = []) {
   const id = `adhoc:${crypto.randomUUID()}`;
   const hasExplicitWorkdir = Boolean((workdir || '').trim());
   const cwd = (workdir || '').trim() || config.VAULT;
-  const prompt = buildAdhocPrompt(name, instructions, hasExplicitWorkdir);
   const resolvedModel = config.MODEL_OPTIONS.includes(model) ? model : config.MODEL_DEFAULT;
+  const trimmedName = (name || '').trim();
+  // What the UI shows as this chat's title AND what Claude sees as its own
+  // session name (via buildAdhocPrompt below) - kept identical so the two
+  // never diverge the way `name || '(untitled)'` vs. the id fallback used to.
+  const title = trimmedName || titleFromInput(instructions);
+  const prompt = withImageNote(buildAdhocPrompt(title, instructions, hasExplicitWorkdir), images);
 
   const entry = {
     kind: 'adhoc',
-    name: (name || '').trim() || null,
+    name: trimmedName || null,
+    title,
     status: 'running',
     startedAt: Date.now(),
     exitCode: null,
@@ -1029,12 +1246,13 @@ function startAdhocSession(name, instructions, workdir, model) {
     paymentGateArmed: false,
     paymentGateReason: null,
     paymentApproved: false,
+    pendingTexts: [],
   };
   tracker.set(id, entry);
   saveState();
 
-  ensurePaymentGateHook(cwd);
-  runTurn(id, entry, prompt, []);
+  ensureGateHooks(cwd);
+  runTurn(id, entry, prompt, [], instructions.trim(), images);
   return id;
 }
 
@@ -1172,6 +1390,7 @@ async function adoptExternalSession(agentId) {
     paymentGateArmed: false,
     paymentGateReason: null,
     paymentApproved: false,
+    pendingTexts: [],
     adoptedNote: 'Adopted from an existing Claude Code session - earlier turns are not shown here, only what happens from now on.',
     adoptStopError: stopError,
   };
@@ -1214,7 +1433,135 @@ function isAuthed(req) {
   const bearer = auth.startsWith('Bearer ') ? auth.slice(7) : '';
   const headerToken = req.headers['x-todolist-token'];
   const queryToken = new URL(req.url, 'http://x').searchParams.get('token');
-  return (bearer || headerToken || queryToken) === config.TODOLIST_TOKEN;
+  const token = bearer || headerToken || queryToken;
+  if (token === config.TODOLIST_TOKEN) return true;
+  return token === AGENT_TOKEN && AGENT_ROUTES.test(req.url.split('?')[0]);
+}
+
+// --- image attachments ---
+// Pasted/attached images are saved under uploads/ and handed to Claude as
+// file paths (it views them with its Read tool) - the CLI is spawned with a
+// plain-string prompt, so there is no content-block path.
+const UPLOADS_DIR = path.join(ROOT, 'uploads');
+const IMAGE_EXT = { 'image/png': '.png', 'image/jpeg': '.jpg', 'image/gif': '.gif', 'image/webp': '.webp' };
+const IMAGE_MIME = { '.png': 'image/png', '.jpg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp' };
+const UPLOAD_NAME = /^[0-9a-f-]{36}\.(png|jpg|gif|webp)$/;
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+
+function readRawBody(req, limit) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let size = 0;
+    req.on('data', c => {
+      size += c.length;
+      if (size > limit) { reject(new Error('image too large (max 10 MB)')); req.destroy(); return; }
+      chunks.push(c);
+    });
+    req.on('end', () => resolve(Buffer.concat(chunks)));
+    req.on('error', reject);
+  });
+}
+
+// Keeps only names we generated ourselves that still exist on disk.
+function validImages(names) {
+  if (!Array.isArray(names)) return [];
+  return names.filter(n => typeof n === 'string' && UPLOAD_NAME.test(n) && fs.existsSync(path.join(UPLOADS_DIR, n)));
+}
+
+function withImageNote(text, names) {
+  if (!names.length) return text;
+  const paths = names.map(n => path.join(UPLOADS_DIR, n)).join('\n');
+  return `${text}\n\n[The user attached ${names.length} image(s) - view them with the Read tool:\n${paths}]`;
+}
+
+// --- texts queued by agents (messages.js send) ---
+// Each request is shown to the user verbatim and only ever sent by the
+// text-approve route (textsend.send), with the exact handle/text/files stored
+// here at request time - the agent can't change any of it afterwards.
+
+const isImageName = name => /\.(png|jpe?g|gif|webp|heic|heif)$/i.test(name);
+
+// What the UI gets: no staged paths, just what it needs to render the card.
+function publicText(t) {
+  return {
+    id: t.id,
+    handle: t.handle,
+    service: t.service,
+    displayName: t.displayName,
+    contactName: t.contactName || null,
+    text: t.text,
+    files: t.files.map(f => ({ name: f.name, size: f.size, from: f.from, image: isImageName(f.name) })),
+    status: t.status,
+    result: t.result || null,
+    requestedAt: t.requestedAt,
+  };
+}
+
+// Tells the agent how its queued text turned out, by resuming the same
+// conversation - or queueing the note if a turn is in flight (flushed by
+// runTurn's exit handler, same as a user reply typed while busy).
+function notifySession(id, entry, note) {
+  if (!entry.sessionId || entry.status === 'finished') return;
+  const busy = entry.status === 'running' && !entry.awaitingInput;
+  if (busy) {
+    entry.queuedMessages = entry.queuedMessages || [];
+    entry.queuedMessages.push(note);
+    saveState();
+    return;
+  }
+  runTurn(id, entry, note, ['--resume', entry.sessionId]);
+}
+
+async function queueTextRequest(entry, body) {
+  const handle = String(body.handle || '').trim();
+  const text = String(body.text || '');
+  const files = Array.isArray(body.files) ? body.files : [];
+  if (!/^(\+?\d{6,15}|[^\s@]+@[^\s@]+\.[^\s@]+)$/.test(handle)) throw new Error(`not a phone number or email: "${handle}"`);
+  if (!text.trim() && !files.length) throw new Error('nothing to send');
+  if (text.length > 5000) throw new Error('text too long');
+  if (files.length > MAX_TEXT_FILES) throw new Error(`at most ${MAX_TEXT_FILES} files`);
+  entry.pendingTexts = entry.pendingTexts || [];
+  if (entry.pendingTexts.filter(t => t.status === 'pending').length >= MAX_PENDING_TEXTS_PER_TASK) {
+    throw new Error(`already ${MAX_PENDING_TEXTS_PER_TASK} texts waiting for the user - wait for them to decide`);
+  }
+
+  const id = crypto.randomUUID();
+  const dir = path.join(OUTGOING_DIR, id);
+  const staged = [];
+  for (const [n, f] of files.entries()) {
+    const from = String(f.path || '');
+    const st = fs.statSync(from);
+    if (!st.isFile()) throw new Error(`not a file: ${from}`);
+    if (st.size > MAX_TEXT_FILE_BYTES) throw new Error(`${from} is over 100 MB`);
+    fs.mkdirSync(dir, { recursive: true });
+    const name = path.basename(from).replace(/[^\w.\- ()]/g, '_');
+    const stagedPath = path.join(dir, `${n}-${name}`);
+    fs.copyFileSync(from, stagedPath);
+    const sha256 = textSend.sha256File(stagedPath);
+    // The agent hashed the file when it queued it; a mismatch means the
+    // file changed in between, so what the user would see isn't what it meant.
+    if (f.sha256 && f.sha256 !== sha256) throw new Error(`${from} changed while being queued`);
+    staged.push({ name, size: st.size, from, staged: stagedPath, sha256 });
+  }
+
+  // The agent's displayName is just a label; the card also shows who this
+  // handle really is per Contacts, so a mislabelled number stands out.
+  let contactName = null;
+  try { contactName = (await people.contactIndex()).get(people.handleKey(handle)) || null; } catch {}
+
+  entry.pendingTexts.push({
+    id,
+    handle,
+    service: body.service === 'SMS' ? 'SMS' : 'iMessage',
+    displayName: String(body.displayName || handle).slice(0, 120),
+    contactName,
+    text,
+    files: staged,
+    status: 'pending',
+    requestedAt: Date.now(),
+  });
+  saveState();
+  return id;
 }
 
 function readBody(req) {
@@ -1270,7 +1617,8 @@ const server = http.createServer(async (req, res) => {
 
     // Top-left "Day" column: Tasks/Events due on `date` (viewer-local, via
     // `tz` = that date's UTC-offset in minutes, JS getTimezoneOffset()
-    // convention) plus the always-open Shopping List. See notion.getDayView.
+    // convention) plus the always-open Shopping List, the class schedule and
+    // Google Calendar (gcal.js). See notion.getDayView.
     if (url === '/api/day' && req.method === 'GET') {
       const params = new URL(req.url, 'http://x').searchParams;
       const date = params.get('date');
@@ -1315,6 +1663,7 @@ const server = http.createServer(async (req, res) => {
           paymentGateArmed: Boolean(entry.paymentGateArmed),
           paymentGateReason: entry.paymentGateReason || null,
           paymentApproved: Boolean(entry.paymentApproved),
+          pendingTexts: (entry.pendingTexts || []).map(publicText),
           // Ephemeral in-progress text - never written to state.json, just
           // the live accumulator for the "Claude is typing" preview.
           streamingText: live ? live.currentAssistantText : '',
@@ -1323,7 +1672,34 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, obj);
     }
 
-    let m = url.match(/^\/api\/tasks\/([^/]+)\/start$/);
+    let m;
+    if (url === '/api/uploads' && req.method === 'POST') {
+      const ext = IMAGE_EXT[(req.headers['content-type'] || '').split(';')[0].trim()];
+      if (!ext) return sendJson(res, 400, { ok: false, error: 'only png, jpeg, gif or webp images are allowed' });
+      try {
+        const buf = await readRawBody(req, MAX_IMAGE_BYTES);
+        if (!buf.length) return sendJson(res, 400, { ok: false, error: 'empty upload' });
+        fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+        const name = crypto.randomUUID() + ext;
+        fs.writeFileSync(path.join(UPLOADS_DIR, name), buf);
+        return sendJson(res, 200, { ok: true, name });
+      } catch (e) {
+        return sendJson(res, 413, { ok: false, error: e.message });
+      }
+    }
+
+    m = url.match(/^\/api\/uploads\/([^/]+)$/);
+    if (m && req.method === 'GET') {
+      const name = decodeURIComponent(m[1]);
+      if (!UPLOAD_NAME.test(name)) { res.writeHead(404); return res.end('not found'); }
+      return fs.readFile(path.join(UPLOADS_DIR, name), (err, data) => {
+        if (err) { res.writeHead(404); return res.end('not found'); }
+        res.writeHead(200, { 'Content-Type': IMAGE_MIME[path.extname(name)], 'Cache-Control': 'private, max-age=86400' });
+        res.end(data);
+      });
+    }
+
+    m = url.match(/^\/api\/tasks\/([^/]+)\/start$/);
     if (m && req.method === 'POST') {
       const id = decodeURIComponent(m[1]);
       const { instructions, workdir, model } = await readBody(req);
@@ -1342,14 +1718,19 @@ const server = http.createServer(async (req, res) => {
     if (m && req.method === 'POST') {
       const id = decodeURIComponent(m[1]);
       const entry = tracker.get(id);
-      const { message } = await readBody(req);
-      if (!message || !message.trim()) {
+      const body = await readBody(req);
+      const images = validImages(body.images);
+      const typed = (body.message || '').trim();
+      if (!typed && !images.length) {
         return sendJson(res, 400, { ok: false, error: 'message is empty' });
       }
+      const message = withImageNote(typed || '(see attached image)', images);
       if (!entry) {
         return sendJson(res, 400, { ok: false, error: 'unknown session id' });
       }
-      const idle = entry.status === 'running' && entry.awaitingInput;
+      // 'completed' (model said done, human hasn't pressed Finish yet) is just
+      // as replyable as 'running' - see markFinished/the exit handler.
+      const idle = (entry.status === 'running' || entry.status === 'completed') && entry.awaitingInput;
       const busy = entry.status === 'running' && !entry.awaitingInput;
       // A paused-but-alive task (waiting on something external, interrupted
       // by a server restart, or crashed) is just as replyable as an idle one,
@@ -1363,6 +1744,7 @@ const server = http.createServer(async (req, res) => {
         // as one message the moment this turn hands back (see runTurn).
         entry.queuedMessages = entry.queuedMessages || [];
         entry.queuedMessages.push(message.trim());
+        entry.queuedImages = (entry.queuedImages || []).concat(images);
         saveState();
         return sendJson(res, 200, { ok: true, queued: true });
       }
@@ -1376,7 +1758,7 @@ const server = http.createServer(async (req, res) => {
       // `claude -p` always exits after one reply, so "replying" means
       // resuming the same conversation in a fresh process, not writing to a
       // still-open stdin.
-      runTurn(id, entry, message.trim(), ['--resume', entry.sessionId]);
+      runTurn(id, entry, message.trim(), ['--resume', entry.sessionId], images.length ? typed : undefined, images);
       return sendJson(res, 200, { ok: true });
     }
 
@@ -1413,8 +1795,7 @@ const server = http.createServer(async (req, res) => {
         // always resolves to 'finished' regardless of the SIGTERM's exit code.
         live.child.kill('SIGTERM');
       } else {
-        entry.status = 'finished';
-        entry.awaitingInput = false;
+        markFinished(entry);
       }
       saveState();
       return sendJson(res, 200, { ok: true });
@@ -1456,8 +1837,7 @@ const server = http.createServer(async (req, res) => {
           entry.sessionEndedByUser = true;
           live.child.kill('SIGTERM');
         } else {
-          entry.status = 'finished';
-          entry.awaitingInput = false;
+          markFinished(entry);
         }
         saveState();
       }
@@ -1484,6 +1864,68 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, { ok: true });
     }
 
+    // Agent side (AGENT_TOKEN is enough): messages.js send queues a text here.
+    m = url.match(/^\/api\/tasks\/([^/]+)\/text-request$/);
+    if (m && req.method === 'POST') {
+      const entry = tracker.get(decodeURIComponent(m[1]));
+      if (!entry) return sendJson(res, 404, { ok: false, error: 'unknown task id' });
+      try {
+        const reqId = await queueTextRequest(entry, await readBody(req));
+        return sendJson(res, 200, { ok: true, id: reqId });
+      } catch (e) {
+        return sendJson(res, 400, { ok: false, error: e.message });
+      }
+    }
+
+    // User side only (TODOLIST_TOKEN): the Send / Reject buttons.
+    m = url.match(/^\/api\/tasks\/([^/]+)\/text-(approve|reject)\/([^/]+)$/);
+    if (m && req.method === 'POST') {
+      const id = decodeURIComponent(m[1]);
+      const entry = tracker.get(id);
+      const t = entry && (entry.pendingTexts || []).find(x => x.id === m[3]);
+      if (!t) return sendJson(res, 404, { ok: false, error: 'unknown request' });
+      if (t.status !== 'pending') return sendJson(res, 400, { ok: false, error: `already ${t.status}` });
+      const who = `${t.displayName} <${t.handle}>`;
+      if (m[2] === 'reject') {
+        t.status = 'rejected';
+        saveState();
+        notifySession(id, entry, `[The user rejected the queued text to ${who} - nothing was sent.]`);
+        return sendJson(res, 200, { ok: true });
+      }
+      t.status = 'sending';
+      saveState();
+      // Answer now; the send + chat.db confirmation can take ~20s and the UI
+      // polls status anyway.
+      sendJson(res, 200, { ok: true });
+      textSend.send(t).then(outcome => {
+        t.status = outcome === 'sent' ? 'sent' : outcome.startsWith('failed') ? 'failed' : 'unconfirmed';
+        t.result = outcome;
+      }, err => {
+        t.status = 'failed';
+        t.result = err.message.slice(0, 500);
+      }).then(() => {
+        saveState();
+        const what = [t.text && `"${t.text}"`, t.files.length && `${t.files.length} file(s)`].filter(Boolean).join(' + ');
+        notifySession(id, entry, `[Text to ${who} (${what}): ${t.result}.]`);
+      });
+      return;
+    }
+
+    m = url.match(/^\/api\/tasks\/([^/]+)\/text-preview\/([^/]+)\/(\d+)$/);
+    if (m && req.method === 'GET') {
+      const entry = tracker.get(decodeURIComponent(m[1]));
+      const t = entry && (entry.pendingTexts || []).find(x => x.id === m[2]);
+      const f = t && t.files[Number(m[3])];
+      if (!f) { res.writeHead(404); return res.end('not found'); }
+      return fs.readFile(f.staged, (err, data) => {
+        if (err) { res.writeHead(404); return res.end('not found'); }
+        const ext = path.extname(f.name).toLowerCase();
+        const type = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.gif': 'image/gif', '.webp': 'image/webp', '.heic': 'image/heic', '.heif': 'image/heif' }[ext] || 'application/octet-stream';
+        res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'private, max-age=86400' });
+        res.end(data);
+      });
+    }
+
     m = url.match(/^\/api\/tasks\/([^/]+)\/notes$/);
     if (m && req.method === 'GET') {
       const id = decodeURIComponent(m[1]);
@@ -1506,8 +1948,11 @@ const server = http.createServer(async (req, res) => {
     // Free-standing session, not tied to any Notion task - see
     // startAdhocSession/buildAdhocPrompt.
     if (url === '/api/sessions/start' && req.method === 'POST') {
-      const { name, instructions, workdir, model } = await readBody(req);
-      const id = startAdhocSession(name, instructions, workdir, model);
+      const { name, instructions, workdir, model, images } = await readBody(req);
+      if (!(instructions || '').trim() && !validImages(images).length) {
+        return sendJson(res, 400, { ok: false, error: 'instructions are required' });
+      }
+      const id = startAdhocSession(name, instructions || '', workdir, model, validImages(images));
       return sendJson(res, 200, { ok: true, id });
     }
 
@@ -1521,7 +1966,7 @@ const server = http.createServer(async (req, res) => {
         list.push({
           id,
           kind: entry.kind,
-          title: entry.name || (entry.kind === 'external' ? `adopted session (${entry.cwd})` : id),
+          title: entry.title || entry.name || (entry.kind === 'external' ? `adopted session (${entry.cwd})` : id),
           cwd: entry.cwd,
         });
       }

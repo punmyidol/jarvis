@@ -82,6 +82,7 @@
   .legend-dot.event { background: var(--event-bg); }
   .legend-dot.class { background: var(--success-bg); }
   .legend-dot.shop { background: var(--shop-bg); }
+  .legend-dot.gcal { background: #4285f4; }
   #dayAllDay:not(:empty) { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
   .day-alldrow { display: flex; flex-wrap: wrap; gap: 6px; }
   .day-alldrow-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted-2); }
@@ -95,6 +96,8 @@
   .day-chip.task { background: var(--task-bg); color: var(--task-text); }
   .day-chip.event { background: var(--event-bg); color: var(--event-text); }
   .day-chip.shop { background: var(--shop-bg); color: var(--shop-text); }
+  /* Fallback only - GCal items normally carry their calendar's own colour inline. */
+  .day-chip.gcal { background: #4285f4; color: #fff; }
   #dayGridWrap {
     position: relative; height: 460px; overflow-y: auto; overflow-x: hidden;
     border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--input-bg);
@@ -112,6 +115,7 @@
   .day-block.task { background: var(--task-bg); color: var(--task-text); }
   .day-block.event { background: var(--event-bg); color: var(--event-text); }
   .day-block.class { background: var(--success-bg); color: var(--success-text); }
+  .day-block.gcal { background: #4285f4; color: #fff; }
   .day-block-title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .day-block-time { font-size: 11px; opacity: 0.85; }
   .day-now-line { position: absolute; left: 42px; right: 4px; height: 2px; background: var(--overdue-text); z-index: 2; }
@@ -160,6 +164,10 @@
   .card.overdue { border-left: 3px solid var(--overdue); }
   .card-top { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px 12px; }
   .card-top-left { display: flex; align-items: center; gap: 10px; min-width: 0; }
+  /* Sidebar entry for a task whose live session is shown in the middle column. */
+  .card.compact .endstate-container, .card.compact .tail-toggle, .card.compact .tail-container,
+  .card.compact .transcript-container, .card.compact .reply-box, .card.compact .actions,
+  .card.compact .send-box, .card.compact .payment-banner-container, .card.compact .text-banner-container { display: none; }
   .markDoneCheckbox {
     appearance: none;
     -webkit-appearance: none;
@@ -236,6 +244,9 @@
 
   .badge.interrupted { background: #7a6a35; color: var(--warn-text); }
   .badge.waiting { background: var(--teal-bg); color: var(--teal-text); }
+  /* Claude says done, nobody's pressed Finish yet - needs the same "your
+     attention" treatment as interrupted/waiting, not a quiet neutral badge. */
+  .badge.completed { background: var(--warn-bg); color: var(--warn-text); }
   /* A run ending is not a task completing - green (.finished) is reserved for
      "actually Done in Notion", everything else stays neutral. */
   .badge.ended { background: #33333a; color: #b9b9c2; }
@@ -248,6 +259,25 @@
   }
   .payment-banner button { flex-shrink: 0; background: var(--danger-text); color: #4a1a1a; }
   .payment-banner button:hover { background: #ffd9d9; }
+
+  /* A text an agent queued (messages.js send) - nothing goes out until Send. */
+  .text-banner {
+    background: var(--warn-bg); border: 1px solid #8b7a4a; color: var(--warn-text);
+    border-radius: var(--radius-sm); padding: 10px 14px; margin-top: 10px; font-size: 13px;
+  }
+  .text-banner .to { font-weight: 700; }
+  .text-banner .to .handle { font-weight: 400; opacity: 0.85; }
+  .text-banner .body {
+    white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 6px; padding: 8px 10px;
+    background: rgba(0, 0, 0, 0.2); border-radius: var(--radius-sm);
+  }
+  .text-banner .files { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+  .text-banner .files img { max-width: 160px; max-height: 160px; border-radius: var(--radius-sm); display: block; }
+  .text-banner .files .file { padding: 6px 8px; background: rgba(0, 0, 0, 0.2); border-radius: var(--radius-sm); overflow-wrap: anywhere; }
+  .text-banner .row { display: flex; gap: 8px; justify-content: flex-end; margin-top: 10px; }
+  .text-banner .row button.send { background: var(--warn-text); color: #3a2f12; }
+  .text-banner .row button.send:hover { background: #fff1dc; }
+  .text-banner .outcome { margin-top: 6px; opacity: 0.9; }
 
   .queued-chip {
     align-self: flex-end; background: #2a4a7a; color: #b9cdf0; opacity: 0.6;
@@ -280,6 +310,15 @@
 
   .send-box { margin-top: 12px; overflow: hidden; height: 0; opacity: 0; }
   .send-box.open { height: auto; opacity: 1; }
+  .attach-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
+  .attach-chips:empty { display: none; }
+  .attach-chip { position: relative; }
+  .attach-chip img { height: 56px; border-radius: 6px; display: block; }
+  .attach-chip button { position: absolute; top: -6px; right: -6px; width: 18px; height: 18px; padding: 0; border-radius: 50%; line-height: 1; font-size: 12px; }
+  .attach-btn { padding: 4px 10px; }
+  .drag-over { outline: 2px dashed var(--accent); }
+  .turn-images { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+  .turn-images img { max-height: 140px; max-width: 100%; border-radius: 6px; cursor: zoom-in; }
   .reply-box { margin-top: 12px; display: none; }
   .reply-box.visible { display: block; }
   .send-box textarea, .send-box input, .reply-box textarea {
@@ -304,6 +343,7 @@
     background: var(--input-bg); border: 1px solid var(--input-border); border-radius: var(--radius-md);
     color: var(--text); font: inherit; padding: 9px 10px;
   }
+  #historyToggle.active { background: var(--teal-bg); color: var(--teal-text); }
   .error-banner {
     background: var(--danger-bg); color: var(--danger-text); border-radius: var(--radius-sm);
     padding: 10px 14px; margin-bottom: 16px; font-size: 13px;
@@ -376,7 +416,8 @@
   </header>
   <div id="errorBanner" class="error-banner" hidden></div>
   <div id="newSessionPanel" class="new-session-panel">
-    <textarea id="newSessionInstructions" class="compose-textarea" rows="1" placeholder="What should Claude do?"></textarea>
+    <textarea id="newSessionInstructions" class="compose-textarea" rows="1" placeholder="What should Claude do? (paste or attach images)"></textarea>
+    <div id="newSessionChips" class="attach-chips"></div>
     <button id="advancedToggle" class="advanced-toggle" type="button" aria-expanded="false">
       <span class="chev">▸</span> Advanced
     </button>
@@ -390,6 +431,7 @@
     </div>
     <div class="row">
       <button id="newSessionGo" class="primary">Go</button>
+      <button id="newSessionAttach" class="attach-btn" type="button" title="Attach image">📎</button>
       <button id="newSessionCancel">Cancel</button>
     </div>
   </div>
@@ -406,6 +448,7 @@
         <span><i class="legend-dot event"></i>Events</span>
         <span><i class="legend-dot class"></i>Classes</span>
         <span><i class="legend-dot shop"></i>Shopping</span>
+        <span><i class="legend-dot gcal"></i>Google</span>
       </div>
       <div id="dayAllDay"></div>
       <div id="dayGridWrap"><div id="dayGrid"></div></div>
@@ -416,11 +459,15 @@
       <div id="detectedSessionsList"></div>
       <div id="runningList"></div>
       <div id="runningEmpty" class="col-empty" style="display:none">No running tasks.</div>
+      <div class="col-title" style="margin-top:16px">Done — review</div>
+      <div id="completedList"></div>
+      <div id="completedEmpty" class="col-empty" style="display:none">Nothing waiting on Finish.</div>
     </div>
     <div id="taskCol">
       <div id="searchRow">
         <input id="searchInput" type="text" placeholder="Search tasks...">
         <select id="projectFilter"><option value="">All projects</option></select>
+        <button id="historyToggle" type="button">History</button>
       </div>
       <div id="list"></div>
       <div id="empty" style="display:none">No open tasks.</div>
@@ -520,11 +567,14 @@
   const empty = document.getElementById('empty');
   const runningList = document.getElementById('runningList');
   const runningEmpty = document.getElementById('runningEmpty');
+  const completedList = document.getElementById('completedList');
+  const completedEmpty = document.getElementById('completedEmpty');
   const meta = document.getElementById('meta');
   const refreshBtn = document.getElementById('refreshBtn');
   const errorBanner = document.getElementById('errorBanner');
   const searchInput = document.getElementById('searchInput');
   const projectFilterSelect = document.getElementById('projectFilter');
+  const historyToggleBtn = document.getElementById('historyToggle');
 
   function showError(msg) {
     errorBanner.textContent = msg;
@@ -539,6 +589,9 @@
   let sessions = [];
   let status = {};
   let searchQuery = '';
+  // Toggles #list between the active/filtered view and the finished-runs
+  // History view - see getHistoryTasks()/getFilteredTasks().
+  let showHistory = false;
   const NO_PROJECT_VALUE = '__NO_PROJECT__'; // sentinel; can't collide with a real project label
   let projectFilter = ''; // '' = all, NO_PROJECT_VALUE = no-project only, else exact project label
   let notesCache = {};
@@ -579,8 +632,22 @@
   // position), mirroring how the tail box already avoids full re-renders.
   let renderedTurnCounts = {};
 
+  // A session that is live-but-not-actively-executing (waiting on something
+  // external, interrupted by a server restart, crashed) is still an open,
+  // resumable session, so it belongs in the Running column too.
   function isRunning(id) {
-    return Boolean(status[id] && status[id].status === 'running');
+    return Boolean(status[id] && ['running', 'waiting', 'interrupted', 'failed'].includes(status[id].status));
+  }
+
+  // Model hit its own done marker, but no human has pressed Finish/mark-done
+  // yet - see markFinished/server.js. Still a live, replyable session.
+  function isCompleted(id) {
+    return Boolean(status[id] && status[id].status === 'completed');
+  }
+
+  // Only ever true after an explicit Finish click / mark-done checkbox.
+  function isHistorical(id) {
+    return Boolean(status[id] && status[id].status === 'finished');
   }
 
   // Every card-worthy item, Notion task or not - adhoc/external sessions
@@ -591,9 +658,10 @@
     return tasks.map(t => ({ ...t, kind: 'notion' })).concat(sessions);
   }
 
-  // Running tasks get their own always-visible column, so they're excluded
-  // here regardless of the search box / project filter - the Running column
-  // itself never applies search/project filtering (see getRunningTasks).
+  // Tasks with a live session also appear (as compact cards, see buildCard)
+  // in the middle Running / Done-review columns, but stay here as plain
+  // entries until marked done. Finished tasks live in History
+  // (see getHistoryTasks()) instead of this searchable active list.
   function getFilteredTasks() {
     const q = searchQuery.trim().toLowerCase();
     let filtered = allItems();
@@ -603,7 +671,7 @@
     } else if (projectFilter) {
       filtered = filtered.filter(t => t.project === projectFilter);
     }
-    return filtered.filter(t => !isRunning(t.id));
+    return filtered.filter(t => !isHistorical(t.id));
   }
 
   // Always every running task, unaffected by search/project filter - the
@@ -611,6 +679,77 @@
   // panel, not a subset of the searchable task list.
   function getRunningTasks() {
     return allItems().filter(t => isRunning(t.id));
+  }
+
+  // Same always-visible treatment as Running, for tasks Claude says are done
+  // but nobody's confirmed yet - this is what keeps a just-finished run from
+  // getting buried at the bottom of a long task list.
+  function getCompletedTasks() {
+    return allItems().filter(t => isCompleted(t.id));
+  }
+
+  // Finished runs, newest-first. `completedAt` only exists on entries
+  // finished after this feature shipped - older ones (finished under the old
+  // auto-finish behavior) fall back to `startedAt` and sort after.
+  function getHistoryTasks() {
+    const key = t => (status[t.id] && (status[t.id].completedAt || status[t.id].startedAt)) || 0;
+    return allItems().filter(t => isHistorical(t.id)).sort((a, b) => key(b) - key(a));
+  }
+
+  // Images in <img> can't carry the auth header, so fetch through the
+  // patched window.fetch and hand the element a blob URL.
+  async function setImgSrc(img, name) {
+    return setImgSrcUrl(img, '/api/uploads/' + encodeURIComponent(name));
+  }
+  async function setImgSrcUrl(img, url) {
+    try {
+      const r = await fetch(url);
+      if (r.ok) img.src = URL.createObjectURL(await r.blob());
+    } catch {}
+  }
+
+  // Paste / drop / 📎 image attach for a textarea. Uploads immediately and
+  // shows removable thumbnails in `chips`. Returns { take() } which yields the
+  // uploaded file names and clears the chips.
+  function attachImages(textarea, chips, attachBtn) {
+    const names = [];
+    const input = document.createElement('input');
+    input.type = 'file'; input.accept = 'image/*'; input.multiple = true; input.hidden = true;
+    async function add(file) {
+      if (!file || !file.type.startsWith('image/')) return;
+      try {
+        const r = await fetch('/api/uploads', { method: 'POST', headers: { 'Content-Type': file.type }, body: file });
+        const data = await r.json();
+        if (!data.ok) throw new Error(data.error || 'upload failed');
+        names.push(data.name);
+        const chip = document.createElement('div');
+        chip.className = 'attach-chip';
+        const img = document.createElement('img');
+        img.src = URL.createObjectURL(file);
+        const x = document.createElement('button');
+        x.type = 'button'; x.textContent = '×';
+        x.addEventListener('click', () => { names.splice(names.indexOf(data.name), 1); chip.remove(); });
+        chip.append(img, x);
+        chips.appendChild(chip);
+      } catch (e) { alert('Image upload failed: ' + e.message); }
+    }
+    textarea.addEventListener('paste', (e) => {
+      const files = [...(e.clipboardData ? e.clipboardData.items : [])]
+        .filter(i => i.kind === 'file' && i.type.startsWith('image/')).map(i => i.getAsFile());
+      if (files.length) { e.preventDefault(); files.forEach(add); }
+    });
+    textarea.addEventListener('dragover', (e) => { e.preventDefault(); textarea.classList.add('drag-over'); });
+    textarea.addEventListener('dragleave', () => textarea.classList.remove('drag-over'));
+    textarea.addEventListener('drop', (e) => {
+      e.preventDefault(); textarea.classList.remove('drag-over');
+      [...e.dataTransfer.files].forEach(add);
+    });
+    attachBtn.addEventListener('click', () => input.click());
+    input.addEventListener('change', () => { [...input.files].forEach(add); input.value = ''; });
+    return {
+      has: () => names.length > 0,
+      take() { const out = names.slice(); names.length = 0; chips.innerHTML = ''; return out; },
+    };
   }
 
   function sendOnEnter(textarea, triggerBtn) {
@@ -673,8 +812,10 @@
     return { open, close, toggle, isOpen };
   }
 
-  function todayStr() {
-    return new Date().toISOString().slice(0, 10);
+  function todayLocalStr() {
+    const d = new Date();
+    const p = n => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
   }
 
   function formatDue(due) {
@@ -757,6 +898,8 @@
       runBadge = st.awaitingInput
         ? `<span class="badge running">${waitingLabel} (${fmtElapsed(st.startedAt)})</span>`
         : `<span class="badge running">Claude is working... (${fmtElapsed(st.startedAt)})</span>`;
+    } else if (st.status === 'completed') {
+      runBadge = `<span class="badge completed">✓ Claude reported done — press Finish to close</span>`;
     } else if (st.status === 'finished') {
       runBadge = st.sessionEndedByUser
         ? `<span class="badge ended">session closed (marked done)</span>`
@@ -783,21 +926,26 @@
     return t.kind === 'notion' ? '/api/tasks' : '/api/sessions';
   }
 
-  function buildCard(t) {
+  function buildCard(t, { compact = false } = {}) {
       const isNotion = t.kind === 'notion';
-      const overdue = isNotion && t.due_date && t.due_date < todayStr();
+      const overdue = isNotion && t.due_date && t.due_date < todayLocalStr();
       const card = document.createElement('div');
-      card.className = 'card' + (overdue ? ' overdue' : '');
+      card.className = 'card' + (overdue ? ' overdue' : '') + (compact ? ' compact' : '');
       card.dataset.id = t.id;
 
       const st = status[t.id];
-      const sendDisabled = st && st.status === 'running';
+      // True while a session is live-or-unclosed: covers 'running' (obviously)
+      // and 'completed' (Claude's done, but the human hasn't pressed Finish/
+      // mark-done yet) - starting a fresh run over either would silently
+      // discard the still-open conversation. Also doubles as "show the Finish
+      // button" for adhoc/external cards (see actionsHtml below).
+      const sendDisabled = st && (st.status === 'running' || st.status === 'completed');
       const sendOpen = openSendBoxIds.has(t.id);
       const notesHtml = notesCache[t.id] || '<div class="notes">loading notes...</div>';
 
       const topLeftHtml = isNotion
         ? `<input type="checkbox" class="markDoneCheckbox" ${st && st.markedDone && !st.markDoneError ? 'checked disabled' : ''}>
-           <div class="title">${escapeHtml(t.title)} <span class="status-badge">${statusBadgeHtml(t.id)}</span></div>`
+           <div class="title">${escapeHtml(t.title)} <span class="status-badge">${compact ? '' : statusBadgeHtml(t.id)}</span></div>`
         : `<div class="title">${escapeHtml(t.title || '(untitled session)')} <span class="status-badge">${statusBadgeHtml(t.id)}</span></div>`;
       const dueHtml = isNotion ? `<div class="due ${overdue ? 'overdue' : ''}">${formatDue(t.due_date)}</div>` : '';
       const subHtml = isNotion
@@ -807,9 +955,10 @@
       const adoptedNoteHtml = st && st.adoptedNote ? `<div class="sub">${escapeHtml(st.adoptedNote)}</div>` : '';
       // Notion cards start a task from here (toggleSend/model-select/send-box);
       // adhoc/external sessions are already running by the time a card exists
-      // for them (started via the New Session panel, or adopted), so they get
-      // a Finish button (see /api/sessions/:id/finish) instead - no Notion
-      // Done checkbox to end their session through.
+      // for them (started via the New Session panel, or adopted), so they have
+      // no Notion Done checkbox to end their session through. Every card gets a
+      // Finish button (/finish): it ends the session only and never touches
+      // Notion - the Done checkbox stays the only thing that marks a task done.
       const actionsHtml = isNotion
         ? `<div class="actions">
              <button class="toggleSend" ${sendDisabled ? 'disabled' : ''}>Send to Claude</button>
@@ -818,6 +967,7 @@
              </select>
              <button class="resumeBtn" hidden>Resume</button>
              <button class="interruptBtn warn" hidden>Interrupt</button>
+             <button class="finishBtn danger" ${sendDisabled ? '' : 'hidden'}>Finish</button>
            </div>`
         : `<div class="actions">
              <button class="resumeBtn" hidden>Resume</button>
@@ -845,6 +995,7 @@
           ${dueHtml}
         </div>
         <div class="payment-banner-container"></div>
+        <div class="text-banner-container"></div>
         ${subHtml}
         ${adoptedNoteHtml}
         ${notesContainerHtml}
@@ -854,9 +1005,11 @@
         <div class="transcript-container"></div>
         <div class="reply-box">
           <div class="hint"></div>
-          <textarea placeholder="Reply to Claude..."></textarea>
+          <textarea placeholder="Reply to Claude... (paste or attach images)"></textarea>
+          <div class="attach-chips"></div>
           <div class="row">
             <button class="reply-send primary">Send</button>
+            <button class="reply-attach attach-btn" type="button" title="Attach image">📎</button>
           </div>
         </div>
         ${actionsHtml}
@@ -1017,20 +1170,40 @@
         }
       });
 
+      // Send / Reject on a queued text - delegated for the same reason.
+      card.addEventListener('click', async (e) => {
+        const btn = e.target.closest('.text-banner button[data-req]');
+        if (!btn) return;
+        const action = btn.classList.contains('send') ? 'approve' : 'reject';
+        btn.closest('.row').querySelectorAll('button').forEach(b => { b.disabled = true; });
+        try {
+          const r = await fetch(`/api/tasks/${encodeURIComponent(t.id)}/text-${action}/${encodeURIComponent(btn.dataset.req)}`, { method: 'POST' });
+          const data = await r.json();
+          if (!data.ok) throw new Error(data.error || 'failed');
+          await pollStatus();
+        } catch (err) {
+          alert(`Failed to ${action === 'approve' ? 'send' : 'reject'}: ` + err.message);
+          btn.closest('.row').querySelectorAll('button').forEach(b => { b.disabled = false; });
+        }
+      });
+
       sendOnEnter(card.querySelector('.reply-box textarea'), card.querySelector('.reply-send'));
       if (goBtn) sendOnEnter(card.querySelector('.send-box textarea'), goBtn);
 
+      const replyAttach = attachImages(card.querySelector('.reply-box textarea'),
+        card.querySelector('.reply-box .attach-chips'), card.querySelector('.reply-attach'));
       card.querySelector('.reply-send').addEventListener('click', async () => {
         const textarea = card.querySelector('.reply-box textarea');
         const message = textarea.value;
-        if (!message.trim()) return;
+        if (!message.trim() && !replyAttach.has()) return;
+        const images = replyAttach.take();
         const sendBtn = card.querySelector('.reply-send');
         sendBtn.disabled = true;
         try {
           const r = await fetch(`${apiBase(t)}/${encodeURIComponent(t.id)}/reply`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ message }),
+            body: JSON.stringify({ message, images }),
           });
           const data = await r.json();
           if (!data.ok) throw new Error(data.error || 'failed to send reply');
@@ -1051,9 +1224,9 @@
   // Deletes an id's entry once its draft goes empty so an intentionally
   // cleared/sent draft doesn't get replayed onto a later rebuild.
   function captureDrafts() {
-    for (const card of [...runningList.children, ...list.children]) {
+    for (const card of [...runningList.children, ...completedList.children, ...list.children]) {
       const id = card.dataset.id;
-      if (!id) continue;
+      if (!id || card.classList.contains('compact')) continue;
       const reply = card.querySelector('.reply-box textarea');
       const sendText = card.querySelector('.send-box textarea');
       const sendWorkdir = card.querySelector('.send-box input[type="text"]');
@@ -1069,9 +1242,9 @@
   // Restores draftValues captured by captureDrafts() onto the freshly-built
   // cards after a renderList() rebuild.
   function restoreDrafts() {
-    for (const card of [...runningList.children, ...list.children]) {
+    for (const card of [...runningList.children, ...completedList.children, ...list.children]) {
       const draft = draftValues[card.dataset.id];
-      if (!draft) continue;
+      if (!draft || card.classList.contains('compact')) continue;
       if (draft.reply) {
         const reply = card.querySelector('.reply-box textarea');
         if (reply) reply.value = draft.reply;
@@ -1087,11 +1260,11 @@
     }
   }
 
-  // Rebuild the visible cards from the current running/filtered task lists.
-  // Runs on initial load / manual Refresh, on every search keystroke, from
-  // the status poll whenever the set of running tasks changes (see
-  // pollStatus/lastRunningKey), and from the sessions poll whenever the
-  // session listing changes (see loadSessions/lastSessionsKey) - the
+  // Rebuild the visible cards from the current running/completed/filtered (or
+  // history) task lists. Runs on initial load / manual Refresh, on every
+  // search keystroke, from the status poll whenever a card's column
+  // membership changes (see pollStatus/lastLayoutKey), and from the sessions
+  // poll whenever the session listing changes (see loadSessions/lastSessionsKey) - the
   // notesCache and openSendBoxIds bookkeeping in buildCard() exists so a
   // re-render doesn't re-flash "loading notes..." or collapse an open
   // send-box on a card that stays visible. captureDrafts()/restoreDrafts()
@@ -1110,20 +1283,27 @@
     for (const t of running) runningList.appendChild(buildCard(t));
     runningEmpty.style.display = running.length ? 'none' : 'block';
 
-    const others = getFilteredTasks();
+    const completed = getCompletedTasks();
+    completedList.innerHTML = '';
+    for (const t of completed) completedList.appendChild(buildCard(t));
+    completedEmpty.style.display = completed.length ? 'none' : 'block';
+
+    const others = showHistory ? getHistoryTasks() : getFilteredTasks();
     list.innerHTML = '';
-    for (const t of others) list.appendChild(buildCard(t));
+    for (const t of others) list.appendChild(buildCard(t, { compact: isRunning(t.id) || isCompleted(t.id) }));
     empty.style.display = others.length ? 'none' : 'block';
-    empty.textContent = allItems().length ? 'No tasks match your filters.' : 'No open tasks.';
+    empty.textContent = showHistory
+      ? 'No finished runs yet.'
+      : (allItems().length ? 'No tasks match your filters.' : 'No open tasks.');
 
     restoreDrafts();
 
     // Entrance animation only for cards whose id wasn't in the previous
     // render pass - a card that's merely being rebuilt alongside a new
     // sibling (e.g. another task started running) must not replay it.
-    const currentIds = new Set([...running, ...others].map(t => t.id));
-    const newCardEls = [...runningList.children, ...list.children]
-      .filter(el => !previousRenderedIds.has(el.dataset.id));
+    const currentIds = new Set([...running, ...completed, ...others].map(t => t.id));
+    const newCardEls = [...runningList.children, ...completedList.children, ...list.children]
+      .filter(el => !previousRenderedIds.has(el.dataset.id) && !el.classList.contains('compact'));
     if (newCardEls.length) {
       animate(newCardEls, { opacity: [0, 1], y: [8, 0] }, { duration: 0.25, delay: stagger(0.04) });
     }
@@ -1173,7 +1353,22 @@
     const el = document.createElement('div');
     if (turn.role === 'user') {
       el.className = 'turn user';
-      el.textContent = turn.text;
+      // displayText (when the server attached one) is what you actually
+      // typed - `text` is the full prompt sent to Claude, which on turn 0
+      // also carries the injected Task/Notes/session-convention boilerplate.
+      // Falls back to `text` for replies and turns from before this existed.
+      el.textContent = turn.displayText != null ? turn.displayText : turn.text;
+      if (turn.images && turn.images.length) {
+        const wrap = document.createElement('div');
+        wrap.className = 'turn-images';
+        for (const name of turn.images) {
+          const img = document.createElement('img');
+          img.addEventListener('click', () => { if (img.src) window.open(img.src, '_blank'); });
+          setImgSrc(img, name);
+          wrap.appendChild(img);
+        }
+        el.appendChild(wrap);
+      }
     } else {
       el.className = 'turn assistant';
       let html = '';
@@ -1258,7 +1453,7 @@
   // reply controls on already-rendered cards - never touches
   // .send-box/.reply-box textarea values, so it can't interrupt your typing.
   function updateStatuses() {
-    for (const card of document.querySelectorAll('#runningList .card, #list .card')) {
+    for (const card of document.querySelectorAll('#runningList .card, #completedList .card, #list .card:not(.compact)')) {
       const id = card.dataset.id;
       const st = status[id];
 
@@ -1306,7 +1501,7 @@
       }
 
       const toggleBtn = card.querySelector('.toggleSend');
-      if (toggleBtn) toggleBtn.disabled = Boolean(st && st.status === 'running');
+      if (toggleBtn) toggleBtn.disabled = Boolean(st && (st.status === 'running' || st.status === 'completed'));
 
       const markDoneBtn = card.querySelector('.markDone');
       // Stays clickable when the PATCH failed - that's exactly when a retry
@@ -1314,7 +1509,9 @@
       if (markDoneBtn) markDoneBtn.disabled = Boolean(st && st.markedDone && !st.markDoneError);
 
       const RESUMABLE_STATUSES = ['waiting', 'interrupted', 'failed'];
-      const idle = Boolean(st && st.status === 'running' && st.awaitingInput);
+      // 'completed' (Claude hit its done marker, nobody's pressed Finish yet)
+      // is just as idle/replyable as 'running' - see markFinished/server.js.
+      const idle = Boolean(st && (st.status === 'running' || st.status === 'completed') && st.awaitingInput);
       const busy = Boolean(st && st.status === 'running' && !st.awaitingInput);
       const resumable = Boolean(st && RESUMABLE_STATUSES.includes(st.status) && st.hasSession && !st.markedDone);
 
@@ -1338,6 +1535,9 @@
           : '';
       }
 
+      const textBannerEl = card.querySelector('.text-banner-container');
+      if (textBannerEl) renderTextBanners(textBannerEl, id, st);
+
       const replyBox = card.querySelector('.reply-box');
       if (replyBox) {
         const visible = idle || busy || resumable;
@@ -1346,6 +1546,8 @@
         let hint = '';
         if (busy) {
           hint = 'Claude is working — your message will be queued and sent as soon as it hands back.';
+        } else if (st && st.status === 'completed') {
+          hint = 'Claude reported this done — press Finish to close, or reply to keep going.';
         } else if (idle) {
           hint = st.evidenceGateFailed
             ? 'Claude claimed this task was done, but its evidence didn\'t cover the checklist above — review the transcript, then reply or mark done manually.'
@@ -1403,7 +1605,10 @@
     // Notion-only - adhoc/external sessions have no Notion page to pull notes
     // from (see the missing .notes-container in buildCard for those kinds).
     const notionOnly = t => t.kind === 'notion';
-    loadAllNotes([...getRunningTasks(), ...getFilteredTasks()].filter(notionOnly));
+    const others = showHistory ? getHistoryTasks() : getFilteredTasks();
+    const seen = new Set();
+    loadAllNotes([...getRunningTasks(), ...getCompletedTasks(), ...others]
+      .filter(notionOnly).filter(t => !seen.has(t.id) && seen.add(t.id)));
   }
 
   // Notes are fetched *after* the list is already visible, a few tasks at a
@@ -1418,9 +1623,8 @@
     async function worker() {
       while (next < taskList.length) {
         const t = taskList[next++];
-        const card = document.querySelector(`.card[data-id="${CSS.escape(t.id)}"]`);
-        const container = card && card.querySelector('.notes-container');
-        if (!container) continue;
+        const containers = [...document.querySelectorAll(`.card[data-id="${CSS.escape(t.id)}"] .notes-container`)];
+        if (!containers.length) continue;
         try {
           const r = await fetch(`/api/tasks/${encodeURIComponent(t.id)}/notes`);
           const { notes } = await r.json();
@@ -1428,13 +1632,47 @@
             ? `<div class="notes"><ul>${notes.map(n => `<li>${escapeHtml(n)}</li>`).join('')}</ul></div>`
             : '<div class="notes">(no notes)</div>';
           notesCache[t.id] = html;
-          container.innerHTML = html;
+          for (const c of containers) c.innerHTML = html;
         } catch {
-          container.innerHTML = '<div class="notes">failed to load notes</div>';
+          for (const c of containers) c.innerHTML = '<div class="notes">failed to load notes</div>';
         }
       }
     }
     await Promise.all(Array.from({ length: Math.min(NOTES_CONCURRENCY, taskList.length) }, worker));
+  }
+
+  // Texts an agent queued (messages.js send): pending ones get Send / Reject,
+  // finished ones linger for a while with their outcome. Re-rendered only when
+  // something changed, so thumbnails aren't refetched on every poll tick.
+  const TEXT_OUTCOME_SHOW_MS = 30 * 60 * 1000;
+  function renderTextBanners(container, taskId, st) {
+    const texts = ((st && st.pendingTexts) || []).filter(t =>
+      t.status === 'pending' || t.status === 'sending' ||
+      (t.status !== 'rejected' && Date.now() - t.requestedAt < TEXT_OUTCOME_SHOW_MS));
+    const sig = JSON.stringify(texts.map(t => [t.id, t.status, t.result]));
+    if (container.dataset.sig === sig) return;
+    container.dataset.sig = sig;
+    container.innerHTML = texts.map(t => {
+      const realName = t.contactName && t.contactName !== t.displayName
+        ? ` · Contacts: ${escapeHtml(t.contactName)}` : '';
+      const files = t.files.map((f, n) => f.image
+        ? `<img data-preview="${n}" alt="${escapeHtml(f.name)}" title="${escapeHtml(f.from)}">`
+        : `<div class="file" title="${escapeHtml(f.from)}">📎 ${escapeHtml(f.name)} · ${(f.size / 1024 / 1024).toFixed(1)} MB</div>`).join('');
+      const actions = t.status === 'pending'
+        ? `<div class="row"><button class="reject" data-req="${t.id}">Reject</button><button class="send" data-req="${t.id}">Send</button></div>`
+        : `<div class="outcome">${t.status === 'sending' ? 'Sending…' : escapeHtml(t.status + (t.result && t.result !== t.status ? ': ' + t.result : ''))}</div>`;
+      return `<div class="text-banner" data-text="${t.id}">
+          <div class="to">💬 Text to ${escapeHtml(t.displayName)} <span class="handle">· ${escapeHtml(t.handle)} · ${escapeHtml(t.service)}${realName}</span></div>
+          ${t.text ? `<div class="body">${escapeHtml(t.text)}</div>` : ''}
+          ${files ? `<div class="files">${files}</div>` : ''}
+          ${actions}
+        </div>`;
+    }).join('');
+    for (const el of container.querySelectorAll('.text-banner')) {
+      for (const img of el.querySelectorAll('img[data-preview]')) {
+        setImgSrcUrl(img, `/api/tasks/${encodeURIComponent(taskId)}/text-preview/${encodeURIComponent(el.dataset.text)}/${img.dataset.preview}`);
+      }
+    }
   }
 
   function escapeHtml(s) {
@@ -1471,11 +1709,6 @@
 
   const DAY_HOUR_PX = 40;
 
-  function todayLocalStr() {
-    const d = new Date();
-    const p = n => String(n).padStart(2, '0');
-    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
-  }
   function addDaysStr(dateStr, n) {
     const d = new Date(`${dateStr}T00:00:00`);
     d.setDate(d.getDate() + n);
@@ -1534,27 +1767,41 @@
     dot.style.top = `${top}px`;
   }
 
+  // Google Calendar items carry their calendar's own colours (as the GCal UI
+  // shows them); everything else is coloured by its kind's CSS class.
+  function dayColorStyle(item) {
+    if (!item.color) return '';
+    return `background:${escapeHtmlDay(item.color)};color:${escapeHtmlDay(item.fg || '#fff')}`;
+  }
+
   function dayChipHtml(item, cls, title) {
     const tag = item.url ? 'a' : 'span';
     const hrefAttr = item.url ? ` href="${escapeHtmlDay(item.url)}" target="_blank" rel="noopener"` : '';
     const titleAttr = title ? ` title="${escapeHtmlDay(title)}"` : '';
-    return `<${tag} class="day-chip ${cls}"${hrefAttr}${titleAttr}>${escapeHtmlDay(item.title)}</${tag}>`;
+    const style = dayColorStyle(item);
+    const styleAttr = style ? ` style="${style}"` : '';
+    return `<${tag} class="day-chip ${cls}"${hrefAttr}${titleAttr}${styleAttr}>${escapeHtmlDay(item.title)}</${tag}>`;
   }
 
   function renderDay(data) {
-    const { tasks = [], events = [], shopping = [], classes = [] } = data || {};
+    const { tasks = [], events = [], shopping = [], classes = [], gcal = [] } = data || {};
     const allDayTasks = tasks.filter(t => !t.hasTime);
     const allDayEvents = events.filter(e => !e.hasTime);
+    const allDayGcal = gcal.filter(g => !g.hasTime);
     // Classes always carry a real time (parsed straight from a schedule
     // table), so there's no all-day bucket for them.
-    const timed = [...tasks.filter(t => t.hasTime), ...events.filter(e => e.hasTime), ...classes];
+    const timed = [
+      ...tasks.filter(t => t.hasTime), ...events.filter(e => e.hasTime), ...classes,
+      ...gcal.filter(g => g.hasTime),
+    ];
 
     const rows = [];
-    if (allDayTasks.length || allDayEvents.length) {
+    if (allDayTasks.length || allDayEvents.length || allDayGcal.length) {
       rows.push(
         '<div class="day-alldrow">' +
         allDayTasks.map(t => dayChipHtml(t, 'task', t.project || '')).join('') +
         allDayEvents.map(e => dayChipHtml(e, 'event', e.project || '')).join('') +
+        allDayGcal.map(g => dayChipHtml(g, 'gcal', g.sub || '')).join('') +
         '</div>'
       );
     }
@@ -1577,12 +1824,12 @@
       const top = (minutesSinceMidnight(item.start) / 60) * DAY_HOUR_PX;
       const durMin = item.end ? (new Date(item.end) - new Date(item.start)) / 60000 : 30;
       const height = Math.max((durMin / 60) * DAY_HOUR_PX, 16);
-      const cls = item.kind === 'task' ? 'task' : item.kind === 'class' ? 'class' : 'event';
+      const cls = item.kind === 'task' ? 'task' : item.kind === 'class' ? 'class' : item.kind === 'gcal' ? 'gcal' : 'event';
       const tooltip = item.project || item.sub || '';
       const tag = item.url ? 'a' : 'div';
       const hrefAttr = item.url ? ` href="${escapeHtmlDay(item.url)}" target="_blank" rel="noopener"` : '';
       gridHtml +=
-        `<${tag} class="day-block ${cls}" style="top:${top}px;height:${height}px"${hrefAttr} title="${escapeHtmlDay(tooltip)}">` +
+        `<${tag} class="day-block ${cls}" style="top:${top}px;height:${height}px;${dayColorStyle(item)}"${hrefAttr} title="${escapeHtmlDay(tooltip)}">` +
         `<div class="day-block-title">${escapeHtmlDay(item.title)}</div>` +
         `<div class="day-block-time">${formatClock(item.start)}${item.end ? '–' + formatClock(item.end) : ''}</div>` +
         `</${tag}>`;
@@ -1590,18 +1837,86 @@
     dayGridEl.innerHTML = gridHtml;
     updateNowLine();
 
-    dayEmptyEl.style.display = (tasks.length + events.length + shopping.length + classes.length === 0) ? 'block' : 'none';
+    dayEmptyEl.style.display = (tasks.length + events.length + shopping.length + classes.length + gcal.length === 0) ? 'block' : 'none';
   }
 
-  async function loadDay() {
-    dayDateInput.value = dayDate;
-    if (dayColTitle) dayColTitle.textContent = formatDayLabel(dayDate);
+  // Stale-while-revalidate cache of /api/day responses, keyed by date. Each
+  // fetch costs several live Notion queries, so switching days used to feel
+  // laggy; now days within +-DAY_CACHE_RADIUS of the viewed one are prefetched
+  // and a switch renders instantly from cache (revalidating in the background
+  // once an entry is older than DAY_CACHE_TTL_MS).
+  const DAY_CACHE_RADIUS = 7;
+  const DAY_CACHE_TTL_MS = 5 * 60 * 1000;
+  const DAY_PREFETCH_CONCURRENCY = 2; // Notion rate-limits ~3 req/s
+  const dayCache = new Map();    // date -> { data, fetchedAt }
+  const dayInflight = new Map(); // date -> Promise (dedupes click vs prefetch)
+
+  function fetchDay(date) {
+    if (dayInflight.has(date)) return dayInflight.get(date);
+    const p = (async () => {
+      try {
+        const tz = new Date(`${date}T00:00:00`).getTimezoneOffset();
+        const r = await fetch(`/api/day?date=${date}&tz=${tz}`);
+        if (!r.ok) return null; // leave any cached/last-good render in place
+        const data = await r.json();
+        dayCache.set(date, { data, fetchedAt: Date.now() });
+        return data;
+      } catch {
+        return null;
+      } finally {
+        dayInflight.delete(date);
+      }
+    })();
+    dayInflight.set(date, p);
+    return p;
+  }
+
+  function dayIsFresh(date) {
+    const c = dayCache.get(date);
+    return Boolean(c) && Date.now() - c.fetchedAt < DAY_CACHE_TTL_MS;
+  }
+
+  // Warms the window around the viewed day (nearest days first, a couple at a
+  // time) and evicts entries that have fallen outside it.
+  let prefetchRunning = false;
+  async function prefetchWindow() {
+    if (prefetchRunning) return;
+    prefetchRunning = true;
     try {
-      const tz = new Date(`${dayDate}T00:00:00`).getTimezoneOffset();
-      const r = await fetch(`/api/day?date=${dayDate}&tz=${tz}`);
-      if (!r.ok) return; // leave the last-good render in place, same failure style as loadTasks
-      renderDay(await r.json());
-    } catch {}
+      for (;;) {
+        const center = dayDate; // re-read each pass so navigating re-centres the window
+        const days = [];
+        for (let i = 0; i <= DAY_CACHE_RADIUS; i++) {
+          days.push(addDaysStr(center, i));
+          if (i) days.push(addDaysStr(center, -i));
+        }
+        const keep = new Set(days);
+        for (const k of [...dayCache.keys()]) if (!keep.has(k)) dayCache.delete(k);
+        const todo = days.filter(d => !dayIsFresh(d) && !dayInflight.has(d));
+        if (!todo.length) break;
+        const batch = todo.slice(0, DAY_PREFETCH_CONCURRENCY);
+        await Promise.all(batch.map(fetchDay));
+        // A failed fetch leaves its date stale; stop rather than hammer Notion.
+        if (batch.every(d => !dayIsFresh(d))) break;
+      }
+    } finally {
+      prefetchRunning = false;
+    }
+  }
+
+  async function loadDay({ force = false } = {}) {
+    const date = dayDate;
+    dayDateInput.value = date;
+    if (dayColTitle) dayColTitle.textContent = formatDayLabel(date);
+
+    const cached = dayCache.get(date);
+    if (cached) renderDay(cached.data);
+    if (!cached || force || !dayIsFresh(date)) {
+      const data = await fetchDay(date);
+      // Rapid clicking: don't paint a response for a day no longer shown.
+      if (data && date === dayDate) renderDay(data);
+    }
+    prefetchWindow();
   }
 
   dayPrevBtn.addEventListener('click', () => { dayDate = addDaysStr(dayDate, -1); loadDay(); });
@@ -1635,7 +1950,7 @@
   // Adhoc + adopted-external sessions - see allItems(). Polled on its own
   // slower interval (not the 2s status poll) since it's just a list of ids/
   // titles, not live turn data.
-  // Diff-guard mirroring pollStatus()'s lastRunningKey - only a real change
+  // Diff-guard mirroring pollStatus()'s lastLayoutKey - only a real change
   // to the session listing should trigger a destructive renderList(); every
   // other tick just re-assigns `sessions` (cheap, keeps other reads fresh).
   let lastSessionsKey = '';
@@ -1711,13 +2026,16 @@
   });
   newSessionCancel.addEventListener('click', closeNewSessionPanel);
   sendOnEnter(newSessionInstructions, newSessionGo);
+  const newSessionAttach = attachImages(newSessionInstructions,
+    document.getElementById('newSessionChips'), document.getElementById('newSessionAttach'));
 
   newSessionGo.addEventListener('click', async () => {
     const instructions = newSessionInstructions.value;
-    if (!instructions.trim()) {
+    if (!instructions.trim() && !newSessionAttach.has()) {
       alert('Instructions are required.');
       return;
     }
+    const images = newSessionAttach.take();
     newSessionGo.disabled = true;
     try {
       const r = await fetch('/api/sessions/start', {
@@ -1728,6 +2046,7 @@
           instructions,
           workdir: newSessionWorkdir.value,
           model: newSessionModel.value,
+          images,
         }),
       });
       const data = await r.json();
@@ -1797,22 +2116,29 @@
     } catch {}
   }
 
-  // Only reordering (a running task starting/stopping) needs a full
-  // renderList() re-sort; every other poll tick just patches badges/tail/
-  // transcript in place via updateStatuses() so open textareas and scroll
-  // position survive.
-  let lastRunningKey = '';
+  // Only reordering (a card moving between the Running / Done-review /
+  // History-or-neither buckets) needs a full renderList() re-sort; every
+  // other poll tick just patches badges/tail/transcript in place via
+  // updateStatuses() so open textareas and scroll position survive. Tracks
+  // all three bucket-determining statuses, not just 'running' - a
+  // completed->finished move (pressing Finish) changes which column a card
+  // belongs in without ever touching 'running'.
+  let lastLayoutKey = '';
 
   async function pollStatus() {
     try {
       const r = await fetch('/api/status');
       status = await r.json();
-      const runningKey = Object.keys(status)
-        .filter(id => status[id].status === 'running')
+      const layoutKey = Object.keys(status)
+        .map(id => {
+          const s = status[id].status;
+          return ['running', 'waiting', 'interrupted', 'failed', 'completed', 'finished'].includes(s) ? `${id}:${s}` : null;
+        })
+        .filter(Boolean)
         .sort()
         .join(',');
-      if (runningKey !== lastRunningKey) {
-        lastRunningKey = runningKey;
+      if (layoutKey !== lastLayoutKey) {
+        lastLayoutKey = layoutKey;
         renderList();
       }
       updateStatuses();
@@ -1831,10 +2157,18 @@
     loadVisibleNotes();
   });
 
+  historyToggleBtn.addEventListener('click', () => {
+    showHistory = !showHistory;
+    historyToggleBtn.classList.toggle('active', showHistory);
+    historyToggleBtn.textContent = showHistory ? '← Active' : 'History';
+    renderList();
+    loadVisibleNotes();
+  });
+
   refreshBtn.addEventListener('click', () => {
     loadTasks();
     loadSessions();
-    loadDay();
+    loadDay({ force: true });
   });
   loadConfig().then(() => {
     populateNewSessionModel();
@@ -1851,7 +2185,7 @@
   setInterval(loadExternalSessions, 15000);
   // Notion Tasks/Events/Shopping change far less often than running-session
   // status - no need for the 2s pollStatus cadence here.
-  setInterval(loadDay, 5 * 60 * 1000);
+  setInterval(() => loadDay({ force: true }), 5 * 60 * 1000);
   // Keeps the current-time line moving between those slower data refreshes.
   setInterval(updateNowLine, 60 * 1000);
 </script>

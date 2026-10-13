@@ -4,6 +4,8 @@
 // PATCH), but reimplemented here in zero-dependency JS using global fetch.
 
 const config = require('./config');
+const gcal = require('./gcal');
+const { dayBoundsUTC } = require('./time');
 
 const API = 'https://api.notion.com/v1';
 
@@ -77,20 +79,6 @@ async function queryOpenTasks() {
 
 // --- Day view (top-left "Day" column): Tasks/Events due on a given date,
 // plus the always-open Shopping List. ---
-
-// Computes the UTC instant for local-midnight -> next-local-midnight of
-// `dateStr`, in whichever timezone the caller is actually in (`tzOffsetMin`,
-// following JS's own `Date.prototype.getTimezoneOffset()` convention:
-// UTC = local + tzOffsetMin). This is what makes "today"/"tomorrow" correct
-// for whoever's viewing the page, rather than hardcoding one timezone.
-function dayBoundsUTC(dateStr, tzOffsetMin) {
-  const [y, m, d] = dateStr.split('-').map(Number);
-  const startMs = Date.UTC(y, m - 1, d, 0, 0, 0) + tzOffsetMin * 60000;
-  return {
-    startISO: new Date(startMs).toISOString(),
-    endISO: new Date(startMs + 24 * 60 * 60 * 1000).toISOString(),
-  };
-}
 
 // `on_or_after`/`before` (not `equals`) so a datetime-valued property (not
 // just a bare date) is correctly bucketed onto the one calendar day it falls
@@ -330,7 +318,7 @@ async function getClassesForDate(dateStr) {
 }
 
 async function getDayView(dateStr, tzOffsetMin) {
-  const [taskPages, eventPages, shoppingPages, classes] = await Promise.all([
+  const [taskPages, eventPages, shoppingPages, classes, gcalEvents] = await Promise.all([
     queryTasksForDate(dateStr, tzOffsetMin),
     queryEventsForDate(dateStr, tzOffsetMin),
     queryOpenShoppingItems(),
@@ -338,6 +326,12 @@ async function getDayView(dateStr, tzOffsetMin) {
     // break the rest of the day view - fall back to no classes and log it.
     getClassesForDate(dateStr).catch(err => {
       console.error('[class-schedule] parse failed:', err.message);
+      return [];
+    }),
+    // Same guard for Google Calendar: an expired token or a Google outage
+    // drops just the GCal events, never the Notion ones.
+    gcal.getEventsForDate(dateStr, tzOffsetMin).catch(err => {
+      console.error('[gcal] fetch failed:', err.message);
       return [];
     }),
   ]);
@@ -361,7 +355,7 @@ async function getDayView(dateStr, tzOffsetMin) {
     title: plainText(p.properties[config.SHOPPING_TITLE_PROP]?.title) || '(untitled)',
     url: p.url,
   }));
-  return { tasks, events, shopping, classes };
+  return { tasks, events, shopping, classes, gcal: gcalEvents };
 }
 
 async function getPageBlocks(pageId) {

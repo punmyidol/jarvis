@@ -20,6 +20,14 @@ function readEnvVar(name, fallback) {
 
 const NOTION_TOKEN = readEnvVar('NOTION_TOKEN', '');
 const TODOLIST_TOKEN = readEnvVar('TODOLIST_TOKEN', '');
+
+// Google Calendar (read-only) for the Day column - see gcal.js. The client
+// id/secret come from a Google Cloud "Desktop app" OAuth client; the refresh
+// token is written by scripts/gcal-auth.js. Any of the three empty -> the
+// Day view simply skips Google Calendar.
+const GCAL_CLIENT_ID = readEnvVar('GCAL_CLIENT_ID', '');
+const GCAL_CLIENT_SECRET = readEnvVar('GCAL_CLIENT_SECRET', '');
+const GCAL_REFRESH_TOKEN = readEnvVar('GCAL_REFRESH_TOKEN', '');
 const VAULT = readEnvVar(
   'NOTER_VAULT',
   '/Users/punmyidol/Library/Mobile Documents/iCloud~md~obsidian/Documents/elvis'
@@ -78,6 +86,10 @@ module.exports = {
   ROOT,
   NOTION_TOKEN,
   TODOLIST_TOKEN,
+  GCAL_CLIENT_ID,
+  GCAL_CLIENT_SECRET,
+  GCAL_REFRESH_TOKEN,
+  ENV_PATH,
   VAULT,
   PORT,
   MODEL_DEFAULT,

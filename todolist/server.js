@@ -228,6 +228,17 @@ const OUTGOING_DIR = path.join(ROOT, 'uploads', 'outgoing');
 // write onto a Notion task page - a free-standing session has no such page.
 // It also gates the create-task convention below, for the same reason: both
 // need a real parent task page to write onto / relate a new task to.
+// Listed in the prompt so the agent doesn't spend a turn on `gmail.js accounts`.
+// Read at server start - restart after `scripts/gmail-auth.js` adds one.
+function gmailAccountsLine() {
+  const accounts = Object.entries(config.GMAIL_ACCOUNTS);
+  if (!accounts.length) {
+    return 'no accounts are signed in yet (the user runs `node todolist/scripts/gmail-auth.js <label>`), ' +
+      'so it will fail until they do;';
+  }
+  return 'accounts (label = address): ' + accounts.map(([label, a]) => `${label} = ${a.address}`).join(', ') + ';';
+}
+
 function buildSessionConventions({ allowProgressNotes, hasExplicitWorkdir }) {
   const lines = [
     'Your job is to CARRY THIS TASK OUT, not to research it. Researching a ' +
@@ -249,6 +260,14 @@ function buildSessionConventions({ allowProgressNotes, hasExplicitWorkdir }) {
       'separate group that starts empty. If the request points at something ' +
       'on their screen ("this page", "this guy", "this email"), say that you ' +
       'can\'t see their tabs and ask them to paste the link or name.',
+    '',
+    'Tabs: every reply of yours runs as a new browser session, so tab IDs from an ' +
+      'earlier reply are invalid ("not in Claude\'s tab group"). Before the first browser ' +
+      'call of EVERY reply, call tabs_context_mcp with createIfEmpty: true and use only the ' +
+      'tab IDs it returns. If a tool says a tab is on a browser-internal URL right after ' +
+      'navigate, the page has not committed yet - check once with tabs_context_mcp instead ' +
+      'of retrying blindly. Read the page (get_page_text / read_page) before using find on ' +
+      'an element you are only guessing exists.',
     '',
     'Single sign-on pages (U-M Okta, Google, Duo) usually go straight through ' +
       'on the user\'s existing session - click Continue / Sign in and see ' +
@@ -285,9 +304,17 @@ function buildSessionConventions({ allowProgressNotes, hasExplicitWorkdir }) {
     '',
     'Email, texts, people and photos - use these to look things up for the task ' +
       '(a code, a confirmation, what someone said, a number), not to browse:',
-    '- Email: the Gmail tools (mcp__claude_ai_Gmail__*) search and read the user\'s mail ' +
-      'and can create drafts. Sending, replying, forwarding and trashing are disabled - ' +
-      'when an email needs to go out, leave a draft and hand back.',
+    `- Email: \`node ${path.join(ROOT, 'gmail.js')}\` works each of the user's mail accounts ` +
+      'through the Gmail API - ' + gmailAccountsLine() + ' `draft --from <account> --to <addr> ' +
+      '--subject <s> (--body <text> | --body-file <path>) [--thread <threadId>] [--attach <path>]...` ' +
+      'saves a draft (--thread replies in that thread; To/Subject default from it), `search <gmail ' +
+      'query> --from <account>` lists threads, `read <threadId> --from <account>` prints one. The ' +
+      'Gmail tools (mcp__claude_ai_Gmail__*) also search/read one of these inboxes. Never compose, ' +
+      'draft, read or send mail in webmail through the browser - one API call there costs many ' +
+      'times fewer tokens than screenshots and clicks. If gmail.js fails (sign-in expired, account ' +
+      'not set up), hand back with the exact error and the subject/body ready to paste; do not ' +
+      'fall back to Chrome. Sending, replying, forwarding and trashing are the user\'s - when an ' +
+      'email needs to go out, leave a draft and hand back.',
     `- Texts (iMessage/SMS): \`node ${path.join(ROOT, 'messages.js')} recent [--days 2]\`, ` +
       '`chat <who>`, `search <text> [--days 30]`.',
     `- People: <who> can be a name, nickname or relation ("mom") - resolved from ` +
@@ -304,6 +331,15 @@ function buildSessionConventions({ allowProgressNotes, hasExplicitWorkdir }) {
       'After queueing, say what is waiting and end your turn; you will be told the ' +
       'outcome in this conversation. Never try to send any other way (AppleScript, ' +
       'Shortcuts, sms:/imessage: links, the browser).',
+    '- PDFs: Chrome\'s PDF viewer cannot be read by the browser tools (empty accessibility ' +
+      'tree), and the Read tool cannot render PDF pages on this machine - do not work a PDF ' +
+      'with screenshots and clicks. Get it onto disk (`curl -L -o <scratch>/x.pdf <url>`, a ' +
+      'browser download, or its vault/upload path) and extract the text with ' +
+      '`/opt/miniconda3/bin/python3 -c "import pdfplumber; ..."` (`page.extract_text()` per ' +
+      'page also answers "which page is X on"; PyMuPDF `import fitz` is there too for scanned ' +
+      'PDFs or page images). Use that absolute interpreter path - the PATH you inherit may not ' +
+      'include miniconda. Fall back to screenshots only if the PDF sits behind a login a ' +
+      'download cannot carry, or the extracted text comes back empty.',
     '- Do not quote private messages or emails back unless they are relevant to the task.',
     '',
     'This is a multi-turn chat session - respond in Markdown, since your ' +
@@ -405,9 +441,10 @@ function buildSessionConventions({ allowProgressNotes, hasExplicitWorkdir }) {
       'Gmail create_draft `attachments[].content` field), and never read a ' +
       'binary file\'s encoded bytes into context - not yourself, not through a subagent. ' +
       'Hand-copying even a 100 KB file takes over an hour and silently corrupts it. ' +
-      'Instead, create the draft/message without the attachment and hand back with an ' +
-      'action item naming the exact file path for the user to attach themselves (or, if ' +
-      'the file is already in Google Drive, link it in the body).',
+      'Instead, pass the file path to `gmail.js draft --attach <path>` (it reads the file ' +
+      'from disk itself). Where that is not possible, create the draft/message without the ' +
+      'attachment and hand back with an action item naming the exact file path for the ' +
+      'user to attach themselves (or, if the file is already in Google Drive, link it in the body).',
   );
   if (allowProgressNotes) {
     lines.push(
@@ -623,6 +660,10 @@ function parseStreamJson(id, entry, chunk) {
       // `--resume` (see runTurn) - the process that produced this event is
       // about to exit either way, one-shot by design.
       if (obj.session_id) entry.sessionId = obj.session_id;
+      // `total_cost_usd` is already the whole conversation's running total
+      // (it keeps climbing across --resume'd processes in the logs), so it
+      // replaces, not adds. Display only - nothing is capped on it.
+      if (typeof obj.total_cost_usd === 'number') entry.costUsd = obj.total_cost_usd;
       const rawText = typeof obj.result === 'string' ? obj.result : live.currentAssistantText;
       const isDone = DONE_MARKER_RE.test(rawText);
       // Strip only the marker line itself (the whole line, including its
@@ -1657,6 +1698,7 @@ const server = http.createServer(async (req, res) => {
           endstateMissing: Boolean(entry.endstateMissing),
           lastDoneEvidence: entry.lastDoneEvidence || [],
           evidenceGateFailed: Boolean(entry.evidenceGateFailed),
+          costUsd: typeof entry.costUsd === 'number' ? entry.costUsd : null,
           hasSession: Boolean(entry.sessionId),
           queuedMessages: entry.queuedMessages || [],
           waitingReason: entry.waitingReason || null,

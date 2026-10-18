@@ -28,6 +28,32 @@ const TODOLIST_TOKEN = readEnvVar('TODOLIST_TOKEN', '');
 const GCAL_CLIENT_ID = readEnvVar('GCAL_CLIENT_ID', '');
 const GCAL_CLIENT_SECRET = readEnvVar('GCAL_CLIENT_SECRET', '');
 const GCAL_REFRESH_TOKEN = readEnvVar('GCAL_REFRESH_TOKEN', '');
+
+// Gmail accounts for gmail.js (drafts + read), one pair of lines per account,
+// written by scripts/gmail-auth.js <label>:
+//   GMAIL_<LABEL>_ADDRESS / GMAIL_<LABEL>_REFRESH_TOKEN
+// Same Desktop-app OAuth client as Calendar. Label -> { address, refreshToken }.
+function readGmailAccounts() {
+  const vars = {};
+  try {
+    const text = fs.readFileSync(ENV_PATH, 'utf8');
+    for (const m of text.matchAll(/^\s*(GMAIL_[A-Z0-9]+_(?:ADDRESS|REFRESH_TOKEN))\s*=\s*(.+?)\s*$/gm)) {
+      vars[m[1]] = m[2];
+    }
+  } catch {}
+  for (const [k, v] of Object.entries(process.env)) {
+    if (/^GMAIL_[A-Z0-9]+_(ADDRESS|REFRESH_TOKEN)$/.test(k) && v) vars[k] = v;
+  }
+  const accounts = {};
+  for (const [k, address] of Object.entries(vars)) {
+    const m = k.match(/^GMAIL_([A-Z0-9]+)_ADDRESS$/);
+    const refreshToken = m && vars[`GMAIL_${m[1]}_REFRESH_TOKEN`];
+    if (m && refreshToken) accounts[m[1].toLowerCase()] = { address, refreshToken };
+  }
+  return accounts;
+}
+const GMAIL_ACCOUNTS = readGmailAccounts();
+
 const VAULT = readEnvVar(
   'NOTER_VAULT',
   '/Users/punmyidol/Library/Mobile Documents/iCloud~md~obsidian/Documents/elvis'
@@ -89,6 +115,7 @@ module.exports = {
   GCAL_CLIENT_ID,
   GCAL_CLIENT_SECRET,
   GCAL_REFRESH_TOKEN,
+  GMAIL_ACCOUNTS,
   ENV_PATH,
   VAULT,
   PORT,

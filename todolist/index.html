@@ -495,6 +495,16 @@
     border-radius: var(--radius-md); padding: 10px 14px; margin-bottom: 16px; font-size: 13px;
   }
 
+  .okta-banner {
+    position: sticky; top: 0; z-index: 50; background: var(--red); color: #fff;
+    border-radius: var(--radius-md); padding: 14px 16px; margin-bottom: 16px;
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap; font-size: 15px;
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+  }
+  .okta-banner[hidden] { display: none; }
+  .okta-banner .okta-num { font-size: 40px; font-weight: 800; line-height: 1; letter-spacing: 1px; }
+  .okta-banner .okta-sub { font-size: 12px; opacity: 0.85; }
+
   #tokenDialog {
     background: var(--surface); color: var(--text); border: 1px solid var(--border-strong);
     border-radius: var(--radius-lg); padding: 18px 20px; width: min(360px, 90vw);
@@ -548,6 +558,7 @@
     </div>
   </header>
   <div id="errorBanner" class="error-banner" hidden></div>
+  <div id="oktaBanner" class="okta-banner" hidden></div>
   <div id="newSessionPanel" class="new-session-panel composer">
     <textarea id="newSessionInstructions" class="composer-input" rows="1" placeholder="What should Claude do? (paste or attach images)"></textarea>
     <div id="newSessionChips" class="attach-chips"></div>
@@ -2398,7 +2409,49 @@
         renderList();
       }
       updateStatuses();
+      renderOktaBanner();
     } catch {}
+  }
+
+  // Okta push approval: an agent is stuck on the U-M Okta number challenge and
+  // the user (maybe on their phone) has to tap the matching number.
+  const oktaBanner = document.getElementById('oktaBanner');
+  const baseTitle = document.title;
+  let oktaKey = '';
+  let oktaTitleTimer = null;
+  function renderOktaBanner() {
+    const ids = Object.keys(status).filter(id => status[id].pendingOkta);
+    const id = ids[0];
+    const o = id && status[id].pendingOkta;
+    if (!o) {
+      oktaBanner.hidden = true;
+      oktaKey = '';
+      if (oktaTitleTimer) { clearInterval(oktaTitleTimer); oktaTitleTimer = null; document.title = baseTitle; }
+      return;
+    }
+    const task = status[id].name || id;
+    const msg = o.kind === 'failed' ? 'Okta push failed or was rejected - sign in manually in Chrome'
+      : o.kind === 'password' ? 'Okta needs your password - sign in manually in Chrome'
+      : 'Tap this number in Okta Verify:';
+    oktaBanner.innerHTML =
+      `<span>${escapeHtml(msg)}</span>` +
+      (o.kind === 'push' ? `<span class="okta-num">${escapeHtml(o.number)}</span>` : '') +
+      `<span class="okta-sub">${escapeHtml(task)}${o.site ? ' · ' + escapeHtml(o.site) : ''}</span>`;
+    oktaBanner.hidden = false;
+    const key = `${id}:${o.kind}:${o.number}:${o.ts}`;
+    if (key === oktaKey) return;
+    oktaKey = key;
+    const label = o.kind === 'push' ? `Okta: tap ${o.number}` : 'Okta: sign in needed';
+    try { if (navigator.vibrate) navigator.vibrate([300, 150, 300]); } catch {}
+    try {
+      if (window.isSecureContext && 'Notification' in window) {
+        if (Notification.permission === 'granted') new Notification(label, { body: task, tag: 'okta' });
+        else if (Notification.permission === 'default') Notification.requestPermission();
+      }
+    } catch {}
+    if (oktaTitleTimer) clearInterval(oktaTitleTimer);
+    let flip = false;
+    oktaTitleTimer = setInterval(() => { flip = !flip; document.title = flip ? label : baseTitle; }, 1000);
   }
 
   searchInput.addEventListener('input', () => {

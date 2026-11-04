@@ -28,6 +28,30 @@ const GATED_TOOLS = new Set([
   'mcp__claude-in-chrome__browser_batch',
 ]);
 
+// agent-browser (a CLI the agent runs through Bash) can submit/commit things
+// exactly like the Chrome tools above, but a Bash call never matches their
+// matchers - so Bash is gated too, narrowed here to agent-browser commands
+// that act on a page. Read-only subcommands (open, snapshot, get, tab, wait,
+// screenshot) stay ungated, mirroring read_page/get_page_text/navigate.
+// Deliberately over-inclusive: any token after `agent-browser` in the same
+// shell segment counts, so `find role button click` and flag-prefixed forms
+// are caught; a false positive only costs a pause while the gate is armed.
+const AGENT_BROWSER_ACTIONS = new Set([
+  'click', 'dblclick', 'fill', 'type', 'press', 'key', 'keyboard', 'select',
+  'check', 'uncheck', 'upload', 'drag', 'dispatch', 'eval', 'evaluate',
+  'batch', 'run-code', 'submit',
+]);
+
+function isGatedBash(command) {
+  if (typeof command !== 'string') return false;
+  return command.split(/[;&|\n]+/).some(segment => {
+    const tokens = segment.trim().split(/\s+/);
+    const i = tokens.findIndex(t => /(^|\/)agent-browser$/.test(t));
+    if (i === -1) return false;
+    return tokens.slice(i + 1).some(t => AGENT_BROWSER_ACTIONS.has(t));
+  });
+}
+
 function allow() {
   process.stdout.write('{}');
   process.exit(0);
@@ -61,7 +85,11 @@ async function main() {
     return allow();
   }
 
-  if (!input || !GATED_TOOLS.has(input.tool_name)) return allow();
+  if (!input) return allow();
+  const gated =
+    GATED_TOOLS.has(input.tool_name) ||
+    (input.tool_name === 'Bash' && isGatedBash(input.tool_input && input.tool_input.command));
+  if (!gated) return allow();
 
   const taskId = process.env.TODOLIST_TASK_ID;
   const port = process.env.TODOLIST_PORT;

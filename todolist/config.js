@@ -68,6 +68,11 @@ const PORT = process.env.PORT || 3300;
 // --model flag meant the CLI default was inherited). Overridable per-run
 // from the UI (see /api/config), but this is the fallback/default.
 const MODEL_DEFAULT = readEnvVar('TODOLIST_MODEL', 'claude-sonnet-5');
+// Browser backend for spawned runs: 'chrome' (Claude in Chrome tools only,
+// the original behaviour) or 'agent-browser' (the agent-browser CLI attached
+// to the user's real Chrome over CDP, with Claude in Chrome kept as fallback).
+const BROWSER_BACKEND = readEnvVar('TODOLIST_BROWSER_BACKEND', 'chrome') === 'agent-browser' ? 'agent-browser' : 'chrome';
+const AGENT_BROWSER_CDP_PORT = readEnvVar('TODOLIST_CDP_PORT', '9222');
 const MODEL_OPTIONS = ['claude-opus-5', 'claude-sonnet-5', 'claude-haiku-4-5-20251001'];
 
 // Notion ids/property names, copied from noter/config.py (kept in sync by hand
@@ -120,6 +125,8 @@ module.exports = {
   VAULT,
   PORT,
   MODEL_DEFAULT,
+  BROWSER_BACKEND,
+  AGENT_BROWSER_CDP_PORT,
   MODEL_OPTIONS,
   NOTION_VERSION,
   TASKS_DATABASE_ID,

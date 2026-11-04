@@ -177,6 +177,10 @@ const PAYMENT_GATE_TOOLS = [
   // Runs a sequence of clicks/typing in one call - ungated, it bypassed
   // every tool above.
   'mcp__claude-in-chrome__browser_batch',
+  // agent-browser runs through Bash; hooks/payment-gate.js narrows this
+  // matcher to agent-browser commands that act on a page (it allows every
+  // other Bash call without consulting the server).
+  'Bash',
 ];
 const PAYMENT_GATE_HOOK_PATH = path.join(ROOT, 'hooks', 'payment-gate.js');
 // Bash backstop for texting: denies direct Messages sends and agent calls to
@@ -256,6 +260,23 @@ function buildSessionConventions({ allowProgressNotes, hasExplicitWorkdir }) {
       'browser tool is refused for a site, say so plainly and name the site - ' +
       'the user can grant it in the Chrome extension.',
     '',
+    ...(config.BROWSER_BACKEND === 'agent-browser' ? [
+      'Faster browsing: prefer the agent-browser CLI (run through Bash) over the ' +
+        'mcp__claude-in-chrome__* tools for reading and clicking - it is far ' +
+        'cheaper per page. It attaches to the same Chrome and logins: always pass ' +
+        `--cdp ${config.AGENT_BROWSER_CDP_PORT} (e.g. agent-browser --cdp ${config.AGENT_BROWSER_CDP_PORT} open <url>). ` +
+        'Loop: open <url>, then snapshot -i (an accessibility tree with refs like ' +
+        '@e1), then click @e1 / fill @e2 "text", then snapshot -i again - refs go ' +
+        'stale after any navigation or page change. If a click is blocked by a ' +
+        'banner or overlay, dismiss it and re-snapshot. Run `agent-browser skills ' +
+        'get core` once if you need the command list. Fall back to the Claude in ' +
+        'Chrome tools whenever agent-browser cannot do the job: it errors that it ' +
+        'cannot connect, a PDF viewer, an image/canvas-only page, or a page it ' +
+        'cannot read. Every rule in this prompt about the browser (payment ' +
+        'approval, asking before submitting personal info, no webmail, no texting ' +
+        'through the browser) applies identically to agent-browser.',
+      '',
+    ] : []),
     'You cannot see the user\'s own open Chrome tabs - your tabs are a ' +
       'separate group that starts empty. If the request points at something ' +
       'on their screen ("this page", "this guy", "this email"), say that you ' +

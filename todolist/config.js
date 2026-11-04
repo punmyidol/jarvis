@@ -73,8 +73,6 @@ const MODEL_DEFAULT = readEnvVar('TODOLIST_MODEL', 'claude-sonnet-5');
 // to the user's real Chrome over CDP, with Claude in Chrome kept as fallback).
 const BROWSER_BACKEND = readEnvVar('TODOLIST_BROWSER_BACKEND', 'chrome') === 'agent-browser' ? 'agent-browser' : 'chrome';
 const AGENT_BROWSER_CDP_PORT = readEnvVar('TODOLIST_CDP_PORT', '9222');
-// How long an Okta push-approval alert stays visible in the UI (ms).
-const OKTA_ALERT_TTL_MS = Number(readEnvVar('OKTA_ALERT_TTL_MS', '')) || 3 * 60 * 1000;
 const MODEL_OPTIONS = ['claude-opus-5', 'claude-sonnet-5', 'claude-haiku-4-5-20251001'];
 
 // Notion ids/property names, copied from noter/config.py (kept in sync by hand
@@ -129,7 +127,6 @@ module.exports = {
   MODEL_DEFAULT,
   BROWSER_BACKEND,
   AGENT_BROWSER_CDP_PORT,
-  OKTA_ALERT_TTL_MS,
   MODEL_OPTIONS,
   NOTION_VERSION,
   TASKS_DATABASE_ID,

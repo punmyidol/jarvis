@@ -212,7 +212,7 @@ const BLOCKED_TOOLS = [
 // agent can't approve its own payment or text via the approve routes.
 // Regenerated per server start; children get it through their env.
 const AGENT_TOKEN = crypto.randomBytes(24).toString('hex');
-const AGENT_ROUTES = /^\/api\/tasks\/[^/]+\/(payment-gate-status|text-request|okta-alert|okta-clear)$/;
+const AGENT_ROUTES = /^\/api\/tasks\/[^/]+\/(payment-gate-status|text-request)$/;
 
 // Texts an agent queued via messages.js send, waiting on the user's click.
 const MAX_PENDING_TEXTS_PER_TASK = 3;
@@ -290,13 +290,7 @@ function buildSessionConventions({ allowProgressNotes, hasExplicitWorkdir }) {
       'of retrying blindly. Read the page (get_page_text / read_page) before using find on ' +
       'an element you are only guessing exists.',
     '',
-    'U-M Okta / Weblogin sign-in (okta.umich.edu) that stops at a push-approval ' +
-      'screen: follow the umich-okta-login skill. It reads the number Okta shows, ' +
-      'alerts the user in the todolist UI with `node ' + path.join(ROOT, 'okta.js') +
-      ' alert <number>` (they tap that number in Okta Verify, maybe from their ' +
-      'phone), waits, then `okta.js clear`. Never type a password; at most 2 pushes per task.',
-    '',
-    'Other single sign-on pages (Google, Duo) usually go straight through ' +
+    'Single sign-on pages (U-M Okta, Google, Duo) usually go straight through ' +
       'on the user\'s existing session - click Continue / Sign in and see ' +
       'what happens before deciding you are blocked. Only when a username, ' +
       'password or code field genuinely needs filling, leave that tab open on ' +
@@ -1632,29 +1626,6 @@ async function queueTextRequest(entry, body) {
   return id;
 }
 
-// Okta push alert: informational only (no side effect), so the agent token may
-// set/clear it. Expires on its own so a stale number is never shown to the user.
-const OKTA_ALERT_TTL_MS = config.OKTA_ALERT_TTL_MS;
-
-function activeOkta(entry) {
-  const o = entry.pendingOkta;
-  if (!o || Date.now() - o.ts > OKTA_ALERT_TTL_MS) return null;
-  return o;
-}
-
-function setOktaAlert(entry, body) {
-  const kind = ['push', 'failed', 'password'].includes(body.kind) ? body.kind : 'push';
-  const number = String(body.number || '').trim();
-  if (kind === 'push' && !/^\d{1,2}$/.test(number)) throw new Error(`not a 1-2 digit number: "${number}"`);
-  entry.pendingOkta = {
-    kind,
-    number: kind === 'push' ? number : '',
-    site: String(body.site || '').slice(0, 120),
-    ts: Date.now(),
-  };
-  saveState();
-}
-
 function readBody(req) {
   return new Promise((resolve, reject) => {
     let body = '';
@@ -1756,7 +1727,6 @@ const server = http.createServer(async (req, res) => {
           paymentGateReason: entry.paymentGateReason || null,
           paymentApproved: Boolean(entry.paymentApproved),
           pendingTexts: (entry.pendingTexts || []).map(publicText),
-          pendingOkta: activeOkta(entry),
           // Ephemeral in-progress text - never written to state.json, just
           // the live accumulator for the "Claude is typing" preview.
           streamingText: live ? live.currentAssistantText : '',
@@ -1965,20 +1935,6 @@ const server = http.createServer(async (req, res) => {
       try {
         const reqId = await queueTextRequest(entry, await readBody(req));
         return sendJson(res, 200, { ok: true, id: reqId });
-      } catch (e) {
-        return sendJson(res, 400, { ok: false, error: e.message });
-      }
-    }
-
-    // Agent side: okta.js alert / clear (see the umich-okta-login skill).
-    m = url.match(/^\/api\/tasks\/([^/]+)\/okta-(alert|clear)$/);
-    if (m && req.method === 'POST') {
-      const entry = tracker.get(decodeURIComponent(m[1]));
-      if (!entry) return sendJson(res, 404, { ok: false, error: 'unknown task id' });
-      try {
-        if (m[2] === 'clear') { entry.pendingOkta = null; saveState(); }
-        else setOktaAlert(entry, await readBody(req));
-        return sendJson(res, 200, { ok: true });
       } catch (e) {
         return sendJson(res, 400, { ok: false, error: e.message });
       }

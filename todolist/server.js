@@ -147,6 +147,12 @@ const ENDSTATE_RE = /```endstate\s*\n([\s\S]*?)```/;
 const DONE_EVIDENCE_FENCE_OPEN = '```done-evidence';
 const DONE_EVIDENCE_FENCE_CLOSE = '```';
 const DONE_EVIDENCE_RE = /```done-evidence\s*\n([\s\S]*?)```/;
+// Session state card: see renderStateCard. Parsed on every turn, unlike endstate.
+const STATE_FENCE_OPEN = '```state';
+const STATE_FENCE_CLOSE = '```';
+const STATE_RE = /```state\s*\n([\s\S]*?)```/;
+const STATE_RE_ALL = /```state\s*\n([\s\S]*?)```/g;
+const MAX_FACTS = 40;
 // A mismatch auto-continues the same session (see runTurn's exit handler)
 // asking the model to reconcile, same mechanism as a real /reply - but bounded,
 // so a model that keeps getting the count wrong eventually surfaces to a human
@@ -426,6 +432,22 @@ function buildSessionConventions({ allowProgressNotes, hasExplicitWorkdir }) {
       'somewhere the user will actually find it afterward - not as it having been said once ' +
       'in this chat, which is not the same thing.',
     '',
+    'Live state: the user changes things outside this chat (booking sites, Notion pages) ' +
+      'between your replies, so what you saw earlier in this conversation may be out of ' +
+      'date. Every reply after the first starts with a "Session state" card kept by the ' +
+      'app. Its Decisions are the user\'s own and override anything earlier in the ' +
+      'conversation; its Observed values may be stale. Before you write a site-derived ' +
+      'fact (a time, price, count, date) into Notion, a message or a booking step, re-read ' +
+      'it from its source (open the page, fetch the Notion page) - the live value is ' +
+      'current, the transcript is not. Never change a live value to match an earlier line ' +
+      'in this conversation, and if the live page disagrees with a Decision, do not edit ' +
+      'either - say so and ask. Keep the card current by ending a reply with a fenced ' +
+      'block, one line per fact, whenever the user states a decision or you read a value ' +
+      `that later steps rely on:\n\n${STATE_FENCE_OPEN}\n` +
+      `<short key> | decision | <value> | user\n<short key> | observed | <value> | <url or page id to re-read>\n` +
+      `${STATE_FENCE_CLOSE}\n\nIf the goal itself changes, you may repeat the endstate block ` +
+      'in a later reply and it replaces the old checklist.',
+    '',
     'Action items: whenever this reply needs something from the user before you can ' +
       'continue (missing information, or something open-ended you need from them, with ' +
       'no fixed set of answers to offer) - not for a routine status update - end the ' +
@@ -595,6 +617,93 @@ function buildAdhocPrompt(title, instructions, hasExplicitWorkdir) {
     .join('\n');
 }
 
+// Session state card. A resumed turn replays a transcript that can't be edited
+// and goes stale (the user changes things on the site or in Notion between
+// replies), so the app keeps its own short list of facts and puts it at the
+// top of every resumed turn - the newest thing the model reads.
+//   decision: something the user chose; authoritative, only the user changes it
+//   observed: read off a live source; `source` says where to re-read it
+// Fence lines: `key | decision|observed | value | source`.
+function parseStateFence(text) {
+  const out = [];
+  for (const m of String(text).matchAll(STATE_RE_ALL)) {
+    for (const raw of m[1].split('\n')) {
+      const parts = raw.replace(/^[-*]\s*/, '').split('|').map(p => p.trim());
+      if (parts.length < 3) continue;
+      const [key, kind] = parts;
+      if (!key || (kind !== 'decision' && kind !== 'observed')) continue;
+      const source = parts.length > 3 ? parts[parts.length - 1] : '';
+      const value = parts.slice(2, parts.length > 3 ? -1 : undefined).join(' | ');
+      if (!value) continue;
+      out.push({ key, kind, value, source });
+    }
+  }
+  return out;
+}
+
+// Latest wins by key, except an observation never replaces a decision: a page
+// the user hasn't touched must not talk the card out of what they said.
+function mergeFacts(entry, parsed, now = Date.now()) {
+  entry.facts = entry.facts || [];
+  for (const f of parsed) {
+    const i = entry.facts.findIndex(e => e.key.toLowerCase() === f.key.toLowerCase());
+    if (i >= 0 && entry.facts[i].kind === 'decision' && f.kind === 'observed') continue;
+    const fact = { key: f.key, value: f.value, kind: f.kind, source: f.source || '', ts: now };
+    if (i >= 0) entry.facts[i] = fact;
+    else entry.facts.push(fact);
+  }
+  if (entry.facts.length > MAX_FACTS) entry.facts = entry.facts.slice(-MAX_FACTS);
+}
+
+// `pin: ...` lines in a user message become decisions without the model's help.
+function applyPins(entry, message) {
+  const pins = [];
+  for (const m of String(message).matchAll(/^[ \t]*pin:[ \t]*(.+)$/gim)) {
+    const value = m[1].trim();
+    pins.push({ key: `pin: ${value.slice(0, 60)}`, kind: 'decision', value, source: 'user' });
+  }
+  if (pins.length) mergeFacts(entry, pins);
+  return pins.length;
+}
+
+function withStateCard(entry, text) {
+  const card = renderStateCard(entry);
+  return card ? `${card}\n\n${text}` : text;
+}
+
+function formatAge(ms) {
+  const min = Math.max(0, Math.round(ms / 60000));
+  if (min < 1) return 'just now';
+  if (min < 60) return `${min}m ago`;
+  const h = Math.round(min / 60);
+  return h < 48 ? `${h}h ago` : `${Math.round(h / 24)}d ago`;
+}
+
+function renderStateCard(entry, now = Date.now()) {
+  const facts = entry.facts || [];
+  if (!facts.length) return '';
+  const decisions = facts.filter(f => f.kind === 'decision');
+  const observed = facts.filter(f => f.kind === 'observed');
+  const lines = ['[Session state - kept by the app; newer than anything earlier in this conversation]'];
+  if (decisions.length) {
+    lines.push(
+      'Decisions (the user\'s - authoritative, they override anything earlier in this ' +
+        'conversation; never change a live value to contradict one, and if the live ' +
+        'site/page disagrees with one, stop and ask instead of editing either):',
+      ...decisions.map(f => (f.key.startsWith('pin: ') ? `- ${f.value}` : `- ${f.key}: ${f.value}`))
+    );
+  }
+  if (observed.length) {
+    lines.push(
+      'Observed (read from live sources; may be stale - re-read from the source before ' +
+        'writing or acting on it):',
+      ...observed.map(f => `- ${f.key}: ${f.value} (${f.source ? `source: ${f.source}; ` : ''}read ${formatAge(now - f.ts)})`)
+    );
+  }
+  lines.push('[end of session state]');
+  return lines.join('\n');
+}
+
 // Mechanical, not a second LLM call: names exactly which checklist items look
 // uncovered (done-evidence is required to map 1:1 onto endstate, in order) and
 // asks the SAME session to reconcile before it's allowed to finish again.
@@ -641,7 +750,7 @@ function extractToolResultText(content) {
 // never leaks back into the displayed text. progress/create-task are left
 // inline on purpose (see parseStreamJson).
 function cutFences(text) {
-  const cutIndex = [ACTION_ITEMS_RE, OPTIONS_RE, ENDSTATE_RE, DONE_EVIDENCE_RE, WAITING_RE]
+  const cutIndex = [ACTION_ITEMS_RE, OPTIONS_RE, ENDSTATE_RE, DONE_EVIDENCE_RE, WAITING_RE, STATE_RE]
     .map(re => text.match(re))
     .filter(Boolean)
     .reduce((min, m) => Math.min(min, m.index), Infinity);
@@ -698,20 +807,21 @@ function parseStreamJson(id, entry, chunk) {
       // calls - reading it from `result` alone meant it was never captured.
       const textBlocks = live.textBlocks || [];
       const allText = textBlocks.length ? textBlocks.join('\n\n') : text;
-      // Endstate is only ever read from the FIRST assistant turn - checked
-      // here, before this turn is pushed below, so entry.turns still only
-      // holds turns from strictly before this one.
+      // Whether this is the FIRST assistant turn - checked here, before this
+      // turn is pushed below, so entry.turns still only holds turns from
+      // strictly before this one. Only the first turn is REQUIRED to carry an
+      // endstate, but a later one may re-state it when the goal changed (the
+      // old checklist would otherwise be repeated forever).
       const isFirstAssistantTurn = !entry.turns.some(t => t.role === 'assistant');
-      let endstateMatch, endstateItems;
-      if (isFirstAssistantTurn) {
-        endstateMatch = allText.match(ENDSTATE_RE);
-        if (endstateMatch) {
-          endstateItems = endstateMatch[1]
-            .split('\n')
-            .map(l => l.trim().replace(/^[-*]\s*/, ''))
-            .filter(Boolean);
-        }
+      const endstateMatch = allText.match(ENDSTATE_RE);
+      let endstateItems;
+      if (endstateMatch) {
+        endstateItems = endstateMatch[1]
+          .split('\n')
+          .map(l => l.trim().replace(/^[-*]\s*/, ''))
+          .filter(Boolean);
       }
+      mergeFacts(entry, parseStateFence(allText));
       const doneEvidenceMatch = text.match(DONE_EVIDENCE_RE);
       let doneEvidence;
       if (doneEvidenceMatch) {
@@ -799,6 +909,9 @@ function parseStreamJson(id, entry, chunk) {
           entry.endstate = [];
           entry.endstateMissing = true;
         }
+      } else if (endstateItems && endstateItems.length) {
+        entry.endstate = endstateItems;
+        entry.endstateMissing = false;
       }
       // The model - not the process exiting - decides the CONVERSATION is
       // done, via `doneMarkerSeen` (ends the chat session, see runTurn's exit
@@ -971,7 +1084,10 @@ function runTurn(id, entry, text, extraArgs, displayText, images) {
   const child = spawn(
     'claude',
     [
-      '-p', text,
+      // On a resumed turn the state card goes first: the transcript replayed
+      // by --resume can't be edited, so the newest thing it reads must be
+      // what is true now (entry.turns above keeps the text as typed).
+      '-p', extraArgs.includes('--resume') ? withStateCard(entry, text) : text,
       '--output-format', 'stream-json',
       '--include-partial-messages',
       '--verbose',
@@ -1791,6 +1907,9 @@ const server = http.createServer(async (req, res) => {
       if (!entry) {
         return sendJson(res, 400, { ok: false, error: 'unknown session id' });
       }
+      // Before the busy/idle split so a pin typed mid-turn is kept too; the
+      // queued message is flushed through runTurn, which carries the card.
+      applyPins(entry, typed);
       // 'completed' (model said done, human hasn't pressed Finish yet) is just
       // as replyable as 'running' - see markFinished/the exit handler.
       const idle = (entry.status === 'running' || entry.status === 'completed') && entry.awaitingInput;

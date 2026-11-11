@@ -2,7 +2,8 @@
 // Claude Code PreToolUse hook on Bash: keeps todolist agents from sending
 // iMessage/SMS any way other than `messages.js send` (which only queues a
 // request the user must approve - see server.js text-request), and from
-// calling the approve routes themselves. A regex backstop, not airtight: the
+// calling the approve routes themselves, or the Gmail send endpoints (gmail.js
+// only drafts). A regex backstop, not airtight: the
 // real control is that only the server's text-approve route ever sends.
 //
 // Registered per-task by server.js ensureGateHooks, alongside payment-gate.js.
@@ -14,6 +15,10 @@ const BLOCKED = [
   [/tell\s+application\s+"?Messages\b|com\.apple\.(iChat|MobileSMS)|\b(imessage|sms):\/?\/?|\bshortcuts\s+run\b/i,
     'Sending texts directly is blocked. Use `node <todolist>/messages.js send <who> [--file <path>] [text]`, ' +
       'which queues it for the user to approve in the todolist UI.'],
+  // gmail.js has no send command on purpose; its compose scope could still
+  // send if called by hand.
+  [/gmail\.googleapis\.com\S*\/(messages|drafts)\/send\b|\/(messages|drafts)\/send\b\S*gmail/i,
+    'Sending email is the user\'s action. Leave a draft (`node <todolist>/gmail.js draft ...`) and hand back.'],
   [/\/(text-approve|text-reject|payment-approve)\b/,
     'Approving or rejecting a send/payment is the user\'s action in the todolist UI, never yours.'],
 ];

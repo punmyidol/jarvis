@@ -10,46 +10,76 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Todolist">
-<meta name="theme-color" content="#1e1e1e">
+<meta name="theme-color" content="#161618">
 <style>
   :root {
-    --bg: #1e1e1e;
+    /* Neutrals - one ramp, layered by lightness instead of shadows. */
+    --bg: #161618;
+    --surface: #1c1c1f;
+    --surface-2: #232327;
+    --input-bg: #121214;
+    --border: #2a2a2f;
+    --border-strong: #3a3a41;
+    --input-border: #2e2e34;
     --text: #dcddde;
-    --text-muted-1: #8a8a92;
-    --text-muted-2: #7a7a82;
-    --text-muted-3: #9a9aa2;
-    --text-muted-4: #a8a8b0;
-    --text-muted-5: #b8b8c0;
-    --surface: #26262b;
-    --border: #333338;
-    --input-bg: #1a1a1d;
-    --input-border: #35353a;
-    --btn-bg: #2a2a2e;
-    --btn-hover: #35353a;
+    --text-mid: #b0b0b8;
+    --text-muted: #8a8a92;
+    --text-faint: #64646c;
+    /* Old names, kept so nothing that still points at them breaks. */
+    --text-muted-1: var(--text-muted);
+    --text-muted-2: var(--text-faint);
+    --text-muted-3: var(--text-muted);
+    --text-muted-4: var(--text-mid);
+    --text-muted-5: var(--text-mid);
+    --btn-bg: var(--surface-2);
+    --btn-hover: #2c2c31;
+
+    /* Status hues. Every status surface is a low-alpha tint of its hue with
+       the hue itself as text - quieter than the old solid fills. */
+    --blue: #6b9cf0;
+    --amber: #d9a94a;
+    --teal: #4fb3ad;
+    --green: #62b97c;
+    --red: #e07070;
     --accent: #3a6bd6;
     --accent-hover: #4a7ae6;
-    --danger-bg: #7a3535;
-    --danger-text: #f5c9c9;
-    --danger-hover: #8a3f3f;
-    --warn-bg: #6b5a2a;
-    --warn-text: #f5e3c9;
-    --warn-hover: #7b6a3a;
-    --teal-bg: #2f6b6b;
-    --teal-text: #cdf0f0;
-    --teal-hover: #3f7b7b;
-    --success-bg: #2f6b3f;
-    --success-text: #cdf0d6;
-    --overdue: #d97a7a;
-    --overdue-text: #e08a8a;
-    --task-bg: #6b5a2a;
-    --task-text: #f5e3c9;
-    --event-bg: #2f6b6b;
-    --event-text: #cdf0f0;
-    --shop-bg: #3a5a8a;
-    --shop-text: #cfe0ff;
-    --radius-lg: 10px;
+    --tint: 14%;
+    --tint-hover: 22%;
+
+    --danger-bg: color-mix(in srgb, var(--red) var(--tint), transparent);
+    --danger-hover: color-mix(in srgb, var(--red) var(--tint-hover), transparent);
+    --danger-text: #f0a8a8;
+    --warn-bg: color-mix(in srgb, var(--amber) var(--tint), transparent);
+    --warn-hover: color-mix(in srgb, var(--amber) var(--tint-hover), transparent);
+    --warn-text: #ecc97e;
+    --teal-bg: color-mix(in srgb, var(--teal) var(--tint), transparent);
+    --teal-hover: color-mix(in srgb, var(--teal) var(--tint-hover), transparent);
+    --teal-text: #8fd8d2;
+    --success-bg: color-mix(in srgb, var(--green) var(--tint), transparent);
+    --success-text: #9edcb0;
+    --info-bg: color-mix(in srgb, var(--blue) var(--tint), transparent);
+    --info-text: #a9c4f5;
+    --overdue: var(--red);
+    --overdue-text: var(--red);
+    --task-bg: var(--warn-bg);
+    --task-text: var(--warn-text);
+    --event-bg: var(--teal-bg);
+    --event-text: var(--teal-text);
+    --shop-bg: var(--info-bg);
+    --shop-text: var(--info-text);
+
+    --radius-lg: 8px;
     --radius-md: 6px;
-    --radius-sm: 8px;
+    --radius-sm: 6px;
+    --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+
+    /* Motion: a no-overshoot spring baked into a CSS linear() curve (the
+       motion.dev AI Kit technique), for hover/press feedback in plain CSS.
+       JS-driven animation uses Motion's own spring, see createDisclosure. */
+    --spring: linear(0, 0.034, 0.128 4.1%, 0.415 9.6%, 0.689 15.6%, 0.86 21.6%,
+                     0.948 27.6%, 0.99 34%, 1.008 41%, 1.01 48%, 1.003 62%, 1);
+    --spring-dur: 0.35s;
+    --fast: 0.12s ease-out;
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
@@ -58,114 +88,164 @@
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     font-size: 17px;
     line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
   }
+  ::selection { background: color-mix(in srgb, var(--accent) 45%, transparent); }
+  * { scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
+
   #wrap { max-width: 1600px; margin: 0 auto; padding: 32px 20px 80px; }
   #columns { display: flex; gap: 28px; align-items: flex-start; }
   #dayCol { flex: 1 1 0; min-width: 300px; }
   #runningCol { flex: 2 1 0; min-width: 380px; }
   #taskCol { flex: 1 1 0; min-width: 300px; }
+  /* Wide layout: the task sidebar is pinned to the viewport and scrolls on
+     its own (search row fixed on top), instead of running the page long. */
+  @media (min-width: 1351px) {
+    #taskCol {
+      position: sticky; top: 16px; max-height: calc(100vh - var(--task-top, 16px) - 16px);
+      display: flex; flex-direction: column;
+    }
+    #searchRow { flex-shrink: 0; }
+    #list, #empty { overflow-y: auto; min-height: 0; }
+    #list { flex: 1; margin-right: -8px; padding-right: 8px; overscroll-behavior: contain; }
+  }
   @media (max-width: 1350px) {
     #columns { flex-direction: column; }
     #dayCol, #runningCol, #taskCol { flex-basis: auto; width: 100%; min-width: 0; }
   }
 
+  /* --- Shared form controls --- */
+  input, textarea, select {
+    transition: border-color var(--fast), background var(--fast);
+  }
+  #dayDate, #searchInput, #projectFilter, #tokenDialog input,
+  .send-box textarea, .send-box input, .reply-box textarea,
+  .new-session-panel input, .new-session-panel textarea, .new-session-panel select {
+    background: var(--input-bg); border: 1px solid var(--input-border); border-radius: var(--radius-md);
+    color: var(--text); font: inherit; font-size: 15px; padding: 8px 10px; color-scheme: dark;
+  }
+  #dayDate:hover, #searchInput:hover, #projectFilter:hover,
+  .send-box textarea:hover, .send-box input:hover, .reply-box textarea:hover,
+  .new-session-panel input:hover, .new-session-panel select:hover { border-color: var(--border-strong); }
+  ::placeholder { color: var(--text-faint); }
+
   /* --- Day view (top-left column) --- */
   #dayNav { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; }
-  #dayNav button { padding: 4px 10px; }
-  #dayDate {
-    flex: 1; min-width: 0; background: var(--input-bg); border: 1px solid var(--input-border);
-    border-radius: var(--radius-md); color: var(--text); font: inherit; padding: 6px 8px; color-scheme: dark;
-  }
-  #dayLegend { display: flex; gap: 12px; margin-bottom: 10px; font-size: 12px; color: var(--text-muted-1); }
-  #dayLegend span { display: inline-flex; align-items: center; gap: 4px; }
-  .legend-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
-  .legend-dot.task { background: var(--task-bg); }
-  .legend-dot.event { background: var(--event-bg); }
-  .legend-dot.class { background: var(--success-bg); }
-  .legend-dot.shop { background: var(--shop-bg); }
+  #dayNav button { padding: 5px 11px; }
+  #dayDate { flex: 1; min-width: 0; padding: 5px 8px; }
+  #dayLegend { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-bottom: 10px; font-size: 12px; color: var(--text-muted); }
+  #dayLegend span { display: inline-flex; align-items: center; gap: 5px; }
+  .legend-dot { width: 7px; height: 7px; border-radius: 2px; display: inline-block; }
+  .legend-dot.task { background: var(--amber); }
+  .legend-dot.event { background: var(--teal); }
+  .legend-dot.class { background: var(--green); }
+  .legend-dot.shop { background: var(--blue); }
   .legend-dot.gcal { background: #4285f4; }
   #dayAllDay:not(:empty) { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
   .day-alldrow { display: flex; flex-wrap: wrap; gap: 6px; }
-  .day-alldrow-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted-2); }
+  .day-alldrow-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-faint); }
   .day-chip {
-    font-size: 13px; padding: 3px 9px; border-radius: var(--radius-lg); white-space: nowrap;
+    font-size: 13px; padding: 2px 8px; border-radius: 4px; white-space: nowrap;
     overflow: hidden; text-overflow: ellipsis; max-width: 100%;
+    background: color-mix(in srgb, var(--c) 16%, transparent); color: var(--fg);
+    box-shadow: inset 2px 0 0 var(--c);
+    transition: background var(--fast);
   }
   .day-block, .day-chip { color: inherit; text-decoration: none; }
   a.day-block { display: block; cursor: pointer; }
   a.day-chip { cursor: pointer; }
-  .day-chip.task { background: var(--task-bg); color: var(--task-text); }
-  .day-chip.event { background: var(--event-bg); color: var(--event-text); }
-  .day-chip.shop { background: var(--shop-bg); color: var(--shop-text); }
-  /* Fallback only - GCal items normally carry their calendar's own colour inline. */
-  .day-chip.gcal { background: #4285f4; color: #fff; }
+  a.day-chip:hover { background: color-mix(in srgb, var(--c) 26%, transparent); }
+  .day-chip.task, .day-block.task { --c: var(--amber); --fg: var(--warn-text); }
+  .day-chip.event, .day-block.event { --c: var(--teal); --fg: var(--teal-text); }
+  .day-chip.shop { --c: var(--blue); --fg: var(--info-text); }
+  .day-block.class { --c: var(--green); --fg: var(--success-text); }
+  /* Fallback only - GCal items normally carry their calendar's own colour
+     inline (as --c, see dayColorStyle). */
+  .day-chip.gcal, .day-block.gcal { --c: #4285f4; --fg: #dbe6fd; }
   #dayGridWrap {
     position: relative; height: 460px; overflow-y: auto; overflow-x: hidden;
-    border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--input-bg);
+    border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--input-bg);
   }
   #dayGrid { position: relative; height: calc(24 * 44px); }
-  .day-hour-row { position: absolute; left: 0; right: 0; height: 44px; border-top: 1px solid var(--border); }
+  .day-hour-row { position: absolute; left: 0; right: 0; height: 44px; border-top: 1px solid #1e1e22; }
   .day-hour-label {
-    position: absolute; left: 4px; top: -7px; font-size: 11px; color: var(--text-muted-2);
-    background: var(--input-bg); padding: 0 3px;
+    position: absolute; left: 4px; top: -8px; font-size: 11px; color: var(--text-faint);
+    background: var(--input-bg); padding: 0 3px; font-variant-numeric: tabular-nums;
   }
   .day-block {
-    position: absolute; left: 42px; right: 4px; border-radius: var(--radius-sm); padding: 2px 6px;
-    font-size: 12px; overflow: hidden; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3); line-height: 1.25;
+    position: absolute; left: 42px; right: 4px; border-radius: 4px; padding: 2px 7px;
+    font-size: 12px; overflow: hidden; line-height: 1.25;
+    background: color-mix(in srgb, var(--c) 18%, var(--input-bg)); color: var(--fg);
+    box-shadow: inset 2px 0 0 var(--c);
+    transition: background var(--fast);
   }
-  .day-block.task { background: var(--task-bg); color: var(--task-text); }
-  .day-block.event { background: var(--event-bg); color: var(--event-text); }
-  .day-block.class { background: var(--success-bg); color: var(--success-text); }
-  .day-block.gcal { background: #4285f4; color: #fff; }
+  a.day-block:hover { background: color-mix(in srgb, var(--c) 28%, var(--input-bg)); }
   .day-block-title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .day-block-time { font-size: 11px; opacity: 0.85; }
-  .day-now-line { position: absolute; left: 42px; right: 4px; height: 2px; background: var(--overdue-text); z-index: 2; }
+  .day-block-time { font-size: 11px; opacity: 0.75; font-variant-numeric: tabular-nums; }
+  .day-now-line { position: absolute; left: 42px; right: 4px; height: 1px; background: var(--red); z-index: 2; }
   .day-now-dot {
-    position: absolute; left: 38px; width: 8px; height: 8px; border-radius: 50%;
-    background: var(--overdue-text); margin-top: -3px; z-index: 2;
+    position: absolute; left: 39px; width: 7px; height: 7px; border-radius: 50%;
+    background: var(--red); margin-top: -3px; z-index: 2;
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--red) 20%, transparent);
   }
-  #dayEmpty { color: var(--text-muted-2); text-align: center; padding: 20px 0; font-size: 13px; }
-  .col-title { font-size: 14px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted-1); margin-bottom: 10px; }
-  .col-empty { color: var(--text-muted-2); text-align: center; padding: 40px 0; }
-  header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; }
-  h1 { font-size: 24px; font-weight: 700; }
-  #meta { color: var(--text-muted-2); font-size: 13px; }
+  #dayEmpty { color: var(--text-faint); text-align: center; padding: 20px 0; font-size: 13px; }
+  .col-title {
+    font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em;
+    color: var(--text-muted); margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid var(--border);
+  }
+  .col-empty { color: var(--text-faint); text-align: center; padding: 32px 0; font-size: 14px; }
+  header {
+    display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px;
+    padding-bottom: 16px; border-bottom: 1px solid var(--border);
+  }
+  header > div { display: flex; align-items: center; gap: 12px; }
+  h1 { font-size: 22px; font-weight: 700; letter-spacing: -0.01em; }
+  #meta { color: var(--text-faint); font-size: 13px; font-variant-numeric: tabular-nums; }
+
+  /* --- Buttons --- */
   button {
-    font: inherit; cursor: pointer; border: none; border-radius: var(--radius-md);
-    padding: 7px 14px; background: var(--btn-bg); color: var(--text);
-    transition: background 0.15s ease;
+    font: inherit; font-size: 14px; line-height: 1.3; cursor: pointer;
+    border: 1px solid var(--border-strong); border-radius: var(--radius-md);
+    padding: 6px 12px; background: var(--btn-bg); color: var(--text); white-space: nowrap;
+    transition: background var(--fast), border-color var(--fast), color var(--fast),
+                transform var(--spring-dur) var(--spring);
   }
-  button:hover { background: var(--btn-hover); }
-  button.primary { background: var(--accent); color: #fff; }
+  button:hover { background: var(--btn-hover); border-color: #46464e; }
+  button:active:not(:disabled) { transform: scale(0.97); transition-duration: 0.08s; }
+  button.primary { background: var(--accent); border-color: transparent; color: #fff; }
   button.primary:hover { background: var(--accent-hover); }
-  button:disabled { opacity: 0.5; cursor: default; }
-  button.danger { background: var(--danger-bg); color: var(--danger-text); margin-left: auto; }
+  button:disabled { opacity: 0.45; cursor: default; }
+  button.danger { background: var(--danger-bg); color: var(--danger-text); border-color: color-mix(in srgb, var(--red) 30%, transparent); }
   button.danger:hover { background: var(--danger-hover); }
-  button.warn { background: var(--warn-bg); color: var(--warn-text); margin-left: auto; }
+  button.warn { background: var(--warn-bg); color: var(--warn-text); border-color: color-mix(in srgb, var(--amber) 30%, transparent); }
   button.warn:hover { background: var(--warn-hover); }
-  button.resumeBtn { background: var(--teal-bg); color: var(--teal-text); margin-left: auto; }
+  button.resumeBtn { background: var(--teal-bg); color: var(--teal-text); border-color: color-mix(in srgb, var(--teal) 30%, transparent); }
   button.resumeBtn:hover { background: var(--teal-hover); }
   .model-select {
     font: inherit; font-size: 13px; cursor: pointer; border: 1px solid var(--input-border);
-    border-radius: var(--radius-md); padding: 5px 8px; background: var(--input-bg); color: var(--text-muted-1);
-    transition: border-color 0.15s ease;
+    border-radius: var(--radius-md); padding: 5px 8px; background: var(--input-bg); color: var(--text-muted);
+    color-scheme: dark;
   }
+  .model-select:hover { border-color: var(--border-strong); color: var(--text-mid); }
 
-  input, textarea, select { transition: border-color 0.15s ease; }
   input:focus-visible, textarea:focus-visible, select:focus-visible,
   button:focus-visible {
     outline: none; border-color: var(--accent);
   }
-  button:focus-visible { box-shadow: 0 0 0 2px var(--accent); }
+  button:focus-visible { box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 55%, transparent); }
 
+  /* --- Cards --- */
   .card {
     background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg);
-    padding: 16px 18px; margin-bottom: 12px; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+    padding: 14px 16px; margin-bottom: 10px;
+    transition: border-color var(--fast);
   }
-  .card.overdue { border-left: 3px solid var(--overdue); }
+  .card:hover { border-color: var(--border-strong); }
+  .card.overdue { box-shadow: inset 2px 0 0 var(--overdue); }
   .card-top { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px 12px; }
   .card-top-left { display: flex; align-items: center; gap: 10px; min-width: 0; }
   /* Sidebar entry for a task whose live session is shown in the middle column. */
+  .card.compact { padding: 10px 14px; }
   .card.compact .endstate-container, .card.compact .tail-toggle, .card.compact .tail-container,
   .card.compact .transcript-container, .card.compact .reply-box, .card.compact .actions,
   .card.compact .send-box, .card.compact .payment-banner-container, .card.compact .text-banner-container { display: none; }
@@ -177,11 +257,14 @@
     flex-shrink: 0;
     cursor: pointer;
     margin: 0;
-    border: 1.5px solid #565660;
-    border-radius: 3px;
+    border: 1.5px solid #4e4e57;
+    border-radius: 4px;
     background: var(--input-bg);
     position: relative;
+    transition: background var(--fast), border-color var(--fast), transform var(--spring-dur) var(--spring);
   }
+  .markDoneCheckbox:hover:not(:disabled) { border-color: var(--text-muted); }
+  .markDoneCheckbox:active:not(:disabled) { transform: scale(0.88); }
   .markDoneCheckbox:checked {
     background: var(--accent);
     border-color: var(--accent);
@@ -201,112 +284,135 @@
     cursor: default;
     opacity: 0.85;
   }
-  .title { font-weight: 600; font-size: 18px; }
-  .due { font-size: 13px; color: var(--text-muted-4); white-space: nowrap; }
+  .title { font-weight: 600; font-size: 17px; line-height: 1.35; }
+  .due { font-size: 13px; color: var(--text-muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
   .due.overdue { color: var(--overdue-text); }
-  .sub { margin-top: 4px; font-size: 13px; color: var(--text-muted-1); }
-  .notes { margin-top: 10px; font-size: 14px; color: var(--text-muted-5); }
+  .sub { margin-top: 4px; font-size: 13px; color: var(--text-muted); }
+  .notes { margin-top: 10px; font-size: 14px; color: var(--text-mid); }
   .notes ul { padding-left: 18px; margin-top: 4px; }
   .notes li { margin: 2px 0; overflow-wrap: anywhere; }
+  .notes li::marker { color: var(--text-faint); }
 
   .endstate-box { margin-top: 10px; font-size: 14px; }
-  .endstate-title { font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted-1); margin-bottom: 4px; }
+  .endstate-title { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-muted); margin-bottom: 4px; }
   .endstate-box ul { list-style: none; padding-left: 0; }
-  .endstate-box li { margin: 3px 0; color: var(--text-muted-5); }
-  .endstate-evidence { color: var(--text-muted-1); font-size: 13px; }
+  .endstate-box li { margin: 3px 0; color: var(--text-mid); }
+  .endstate-evidence { color: var(--text-muted); font-size: 13px; }
   .endstate-warn {
-    margin-top: 6px; font-size: 13px; color: var(--warn-text); background: #4a3d1f;
+    margin-top: 6px; font-size: 13px; color: var(--warn-text); background: var(--warn-bg);
     border-radius: var(--radius-md); padding: 6px 8px;
   }
 
   .badge {
-    display: inline-block; font-size: 13px; padding: 2px 8px; border-radius: var(--radius-lg);
-    margin-left: 8px; vertical-align: middle;
+    display: inline-block; font-size: 12px; font-weight: 500;
+    padding: 1px 7px; border-radius: 4px; margin-left: 8px; vertical-align: middle;
+    border: 1px solid transparent;
   }
-  .badge.running { background: #3a5a8a; color: #cfe0ff; }
+  .badge.running {
+    background: var(--info-bg); color: var(--info-text);
+    border-color: color-mix(in srgb, var(--blue) 25%, transparent);
+  }
+  .badge.running::before {
+    content: ''; display: inline-block; width: 5px; height: 5px; border-radius: 50%;
+    background: var(--blue); margin-right: 5px; vertical-align: 1px;
+    animation: badge-pulse 1.6s ease-in-out infinite;
+  }
+  @keyframes badge-pulse { 50% { opacity: 0.3; } }
   .badge.finished { background: var(--success-bg); color: var(--success-text); }
   .badge.failed { background: var(--danger-bg); color: var(--danger-text); }
 
   .tail-toggle[hidden] { display: none; }
   .tail-toggle {
-    font-size: 12px; color: var(--text-muted-1); background: none; padding: 2px 0;
+    font-size: 12px; color: var(--text-muted); background: none; border: none; padding: 2px 0;
     margin-top: 8px; display: inline-flex; align-items: center; gap: 4px;
   }
   .tail-toggle:hover { background: none; color: var(--text); }
-  .tail-toggle .chev { display: inline-block; transition: transform 0.18s ease; }
+  .tail-toggle .chev { display: inline-block; transition: transform var(--spring-dur) var(--spring); }
   .tail-toggle.open .chev { transform: rotate(90deg); }
   .tail {
     overflow: hidden; height: 0; opacity: 0;
-    margin-top: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 12px; color: var(--text-muted-3); white-space: pre-wrap; word-break: break-word;
-    background: var(--input-bg); border-radius: var(--radius-md);
+    margin-top: 0; font-family: var(--mono);
+    font-size: 12px; color: var(--text-muted); white-space: pre-wrap; word-break: break-word;
+    background: var(--input-bg); border: 1px solid var(--border); border-radius: var(--radius-md);
   }
-  .tail.open { height: auto; opacity: 1; margin-top: 6px; padding: 8px; max-height: 160px; overflow-y: auto; }
+  .tail.open { height: auto; opacity: 1; margin-top: 6px; padding: 8px 10px; max-height: 160px; overflow-y: auto; }
 
-  .badge.interrupted { background: #7a6a35; color: var(--warn-text); }
+  .badge.interrupted { background: var(--warn-bg); color: var(--warn-text); }
   .badge.waiting { background: var(--teal-bg); color: var(--teal-text); }
   /* Claude says done, nobody's pressed Finish yet - needs the same "your
      attention" treatment as interrupted/waiting, not a quiet neutral badge. */
-  .badge.completed { background: var(--warn-bg); color: var(--warn-text); }
+  .badge.completed {
+    background: var(--warn-bg); color: var(--warn-text);
+    border-color: color-mix(in srgb, var(--amber) 30%, transparent);
+  }
   /* A run ending is not a task completing - green (.finished) is reserved for
      "actually Done in Notion", everything else stays neutral. */
-  .badge.ended { background: #33333a; color: #b9b9c2; }
+  .badge.ended { background: var(--surface-2); color: var(--text-muted); border-color: var(--border); }
+  .badge.cost { background: none; color: var(--text-muted); border-color: var(--border); font-variant-numeric: tabular-nums; }
 
   .payment-banner {
-    background: var(--danger-bg); border: 1px solid #a84f4f; color: var(--danger-text);
-    border-radius: var(--radius-sm); padding: 10px 14px; margin-top: 10px;
+    background: var(--danger-bg); border: 1px solid color-mix(in srgb, var(--red) 35%, transparent); color: var(--danger-text);
+    border-radius: var(--radius-md); padding: 10px 14px; margin-top: 10px;
     display: flex; align-items: center; justify-content: space-between; gap: 12px;
     font-size: 13px;
   }
-  .payment-banner button { flex-shrink: 0; background: var(--danger-text); color: #4a1a1a; }
-  .payment-banner button:hover { background: #ffd9d9; }
+  .payment-banner button { flex-shrink: 0; background: var(--danger-text); color: #3a1414; border-color: transparent; }
+  .payment-banner button:hover { background: #ffd0d0; }
 
   /* A text an agent queued (messages.js send) - nothing goes out until Send. */
   .text-banner {
-    background: var(--warn-bg); border: 1px solid #8b7a4a; color: var(--warn-text);
-    border-radius: var(--radius-sm); padding: 10px 14px; margin-top: 10px; font-size: 13px;
+    background: var(--warn-bg); border: 1px solid color-mix(in srgb, var(--amber) 35%, transparent); color: var(--warn-text);
+    border-radius: var(--radius-md); padding: 10px 14px; margin-top: 10px; font-size: 13px;
   }
   .text-banner .to { font-weight: 700; }
-  .text-banner .to .handle { font-weight: 400; opacity: 0.85; }
+  .text-banner .to .handle { font-weight: 400; opacity: 0.8; }
   .text-banner .body {
     white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 6px; padding: 8px 10px;
-    background: rgba(0, 0, 0, 0.2); border-radius: var(--radius-sm);
+    background: rgba(0, 0, 0, 0.25); border-radius: var(--radius-sm);
   }
   .text-banner .files { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
   .text-banner .files img { max-width: 160px; max-height: 160px; border-radius: var(--radius-sm); display: block; }
-  .text-banner .files .file { padding: 6px 8px; background: rgba(0, 0, 0, 0.2); border-radius: var(--radius-sm); overflow-wrap: anywhere; }
+  .text-banner .files .file { padding: 6px 8px; background: rgba(0, 0, 0, 0.25); border-radius: var(--radius-sm); overflow-wrap: anywhere; }
   .text-banner .row { display: flex; gap: 8px; justify-content: flex-end; margin-top: 10px; }
-  .text-banner .row button.send { background: var(--warn-text); color: #3a2f12; }
-  .text-banner .row button.send:hover { background: #fff1dc; }
+  .text-banner .row button.send { background: var(--warn-text); color: #2e240c; border-color: transparent; }
+  .text-banner .row button.send:hover { background: #f6dca2; }
   .text-banner .outcome { margin-top: 6px; opacity: 0.9; }
 
   .queued-chip {
-    align-self: flex-end; background: #2a4a7a; color: #b9cdf0; opacity: 0.6;
-    border-radius: var(--radius-sm); padding: 8px 10px; font-size: 14px; max-width: 92%;
-    white-space: pre-wrap; font-style: italic;
+    align-self: flex-end; background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--info-text);
+    border: 1px dashed color-mix(in srgb, var(--accent) 45%, transparent);
+    border-radius: var(--radius-md); padding: 7px 10px; font-size: 14px; max-width: 92%;
+    white-space: pre-wrap; font-style: italic; opacity: 0.75;
   }
 
+  /* --- Transcript --- */
   .transcript {
-    margin-top: 8px; display: flex; flex-direction: column; gap: 8px;
+    margin-top: 10px; display: flex; flex-direction: column; gap: 8px;
     max-height: 320px; overflow-y: auto; padding: 4px 2px;
   }
-  .turn { border-radius: var(--radius-sm); padding: 8px 10px; font-size: 14px; max-width: 92%; }
-  .turn.user { align-self: flex-end; background: #2a4a7a; color: #dfe8fa; white-space: pre-wrap; }
-  .turn.assistant { align-self: flex-start; background: var(--surface); border: 1px solid var(--border); }
-  .turn.assistant.pending { opacity: 0.75; border-style: dashed; }
+  .turn { border-radius: var(--radius-md); padding: 7px 11px; font-size: 14px; max-width: 92%; }
+  .turn.user {
+    align-self: flex-end; background: color-mix(in srgb, var(--accent) 24%, var(--surface));
+    color: #e2eafb; white-space: pre-wrap;
+  }
+  .turn.assistant { align-self: flex-start; background: var(--input-bg); border: 1px solid var(--border); }
+  .turn.assistant.pending { opacity: 0.7; border-style: dashed; }
   .turn.assistant :first-child { margin-top: 0; }
   .turn.assistant :last-child { margin-bottom: 0; }
   .turn.assistant p, .turn.assistant ul, .turn.assistant ol { margin: 6px 0; padding-left: 20px; }
-  .turn.assistant pre { background: var(--input-bg); padding: 8px; border-radius: var(--radius-md); overflow-x: auto; }
-  .turn.assistant code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+  .turn.assistant pre { background: var(--surface); border: 1px solid var(--border); padding: 8px 10px; border-radius: var(--radius-md); overflow-x: auto; }
+  .turn.assistant code { font-family: var(--mono); font-size: 12px; }
+  .turn.assistant :not(pre) > code { background: var(--surface-2); padding: 1px 4px; border-radius: 3px; }
+  .turn.assistant a { color: var(--info-text); }
   .turn.assistant pre.action-box {
-    background: #2a3a1d; border: 1px solid #4a6b2f; color: #d6f0c0;
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px;
-    margin: 0 0 8px; padding: 8px;
+    background: color-mix(in srgb, var(--green) 10%, var(--input-bg));
+    border: 1px solid color-mix(in srgb, var(--green) 30%, transparent); color: var(--success-text);
+    font-family: var(--mono); font-size: 12px;
+    margin: 0 0 8px; padding: 8px 10px;
   }
   .turn.assistant .options-box { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
-  .turn.assistant .options-box button { font-size: 12px; padding: 5px 10px; }
-  .turn.assistant .options-box button:first-child { background: var(--accent); color: #fff; }
+  .turn.assistant .options-box button { font-size: 12px; padding: 4px 10px; }
+  .turn.assistant .options-box button:first-child { background: var(--accent); border-color: transparent; color: #fff; }
   .turn.assistant .options-box button:first-child:hover { background: var(--accent-hover); }
 
   .send-box { margin-top: 12px; overflow: hidden; height: 0; opacity: 0; }
@@ -314,9 +420,62 @@
   .attach-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
   .attach-chips:empty { display: none; }
   .attach-chip { position: relative; }
-  .attach-chip img { height: 56px; border-radius: 6px; display: block; }
+  .attach-chip img { height: 56px; border-radius: var(--radius-md); display: block; border: 1px solid var(--border); }
   .attach-chip button { position: absolute; top: -6px; right: -6px; width: 18px; height: 18px; padding: 0; border-radius: 50%; line-height: 1; font-size: 12px; }
-  .attach-btn { padding: 4px 10px; }
+  .icon {
+    width: 1em; height: 1em; flex-shrink: 0; vertical-align: -0.125em;
+    fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round;
+  }
+
+  /* --- Composer (Claude Cowork layout): one rounded box, text on top, a
+     toolbar inside it below - attach/folder on the left, model + send on the
+     right. Used by the new-session panel, each card's reply box and each
+     Notion card's send-box. --- */
+  .composer {
+    background: var(--input-bg); border: 1px solid var(--input-border); border-radius: 12px;
+    padding: 10px 10px 8px 12px; cursor: text;
+    transition: border-color var(--fast);
+  }
+  .composer:hover { border-color: var(--border-strong); }
+  .composer:focus-within { border-color: #4a4a52; }
+  .composer .composer-input, .composer .composer-input:hover, .composer .composer-input:focus-visible {
+    display: block; width: 100%; background: none; border: none; outline: none; padding: 0; margin: 0;
+    resize: none; font-size: 15px; min-height: 44px; max-height: 240px; overflow-y: hidden;
+  }
+  .composer .attach-chips { margin: 8px 0 0; }
+  .composer-bar { display: flex; align-items: center; gap: 4px; margin-top: 8px; cursor: default; }
+  .composer-bar .end { margin-left: auto; display: flex; align-items: center; gap: 6px; }
+  .composer-bar [hidden] { display: none !important; }
+  .composer .ghost-btn, .composer .send-btn, .composer .stop-btn {
+    width: 30px; height: 30px; padding: 0; flex-shrink: 0; border-radius: 8px;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  .composer .ghost-btn { background: none; border-color: transparent; color: var(--text-muted); }
+  .composer .ghost-btn:hover { background: var(--surface-2); color: var(--text); }
+  .composer .ghost-btn .icon { width: 17px; height: 17px; }
+  .composer .send-btn { background: var(--accent); border-color: transparent; color: #fff; }
+  .composer .send-btn:hover { background: var(--accent-hover); }
+  .composer .send-btn .icon { width: 16px; height: 16px; stroke-width: 2.4; }
+  .composer .stop-btn { background: var(--text); border-color: transparent; color: var(--bg); }
+  .composer .stop-btn:hover { background: #fff; }
+  .composer .stop-btn .icon { width: 12px; height: 12px; fill: currentColor; stroke: none; }
+  /* Working-directory picker: a quiet chip like Cowork's folder selector. */
+  .composer .folder {
+    display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 8px; min-width: 0;
+    border-radius: 8px; color: var(--text-muted); transition: background var(--fast);
+  }
+  .composer .folder:hover, .composer .folder:focus-within { background: var(--surface-2); }
+  .composer .folder .icon { width: 15px; height: 15px; }
+  .composer .folder .folder-input, .composer .folder .folder-input:hover {
+    background: none; border: none; outline: none; padding: 0; margin: 0;
+    width: 210px; min-width: 0; font-size: 13px; color: var(--text-mid);
+  }
+  .composer .model-select, .composer .model-select:hover {
+    width: auto; margin: 0; padding: 4px 6px; border-color: transparent; background: none;
+    font-size: 13px; color: var(--text-muted);
+  }
+  .composer .model-select:hover { background: var(--surface-2); color: var(--text); }
+  .drag-over { outline: 1px dashed var(--accent); outline-offset: 2px; }
   #mathBtn { margin-right: 6px; }
   /* /math: the same app, narrowed to math chats only (see MATH_PAGE). */
   body:not(.math-page) #mathBtn { display: none; }
@@ -328,93 +487,67 @@
   .turn.assistant .katex { font-size: 1.08em; }
   .card.math .turn.assistant { line-height: 1.55; }
   .card.math .turn-images img { max-height: 260px; }
-  .drag-over { outline: 2px dashed var(--accent); }
   .turn-images { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
-  .turn-images img { max-height: 140px; max-width: 100%; border-radius: 6px; cursor: zoom-in; }
+  .turn-images img { max-height: 140px; max-width: 100%; border-radius: var(--radius-md); cursor: zoom-in; }
   .reply-box { margin-top: 12px; display: none; }
   .reply-box.visible { display: block; }
-  .send-box textarea, .send-box input, .reply-box textarea {
-    width: 100%; background: var(--input-bg); border: 1px solid var(--input-border); border-radius: var(--radius-md);
-    color: var(--text); font: inherit; padding: 9px 10px; margin-top: 6px;
-  }
-  .send-box textarea, .reply-box textarea { min-height: 60px; resize: vertical; }
-  .send-box label { font-size: 11px; color: var(--text-muted-1); }
-  .send-box .row, .reply-box .row { display: flex; gap: 8px; margin-top: 10px; }
-  .reply-box .hint { font-size: 11px; color: var(--text-muted-1); margin-bottom: 2px; }
-  .reply-box.visible.active .hint { color: #7fa8f5; font-weight: 600; }
-  .reply-box.visible.active textarea { border-color: var(--accent); }
-  .reply-box:not(.active) textarea { opacity: 0.6; }
+  .reply-box .hint { font-size: 11px; color: var(--text-muted); margin-bottom: 6px; }
+  .reply-box.visible.active .hint { color: var(--info-text); font-weight: 600; }
+  .reply-box.visible.active .composer { border-color: color-mix(in srgb, var(--accent) 70%, transparent); }
+  .reply-box:not(.active) .composer-input { opacity: 0.6; }
   .actions { margin-top: 12px; display: flex; align-items: center; gap: 8px; }
-  #empty { color: var(--text-muted-2); text-align: center; padding: 40px 0; }
+  .actions-end { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+  #empty { color: var(--text-faint); text-align: center; padding: 40px 0; font-size: 14px; }
   #searchRow { margin-bottom: 16px; display: flex; gap: 8px; }
-  #searchInput {
-    flex: 1; background: var(--input-bg); border: 1px solid var(--input-border); border-radius: var(--radius-md);
-    color: var(--text); font: inherit; padding: 9px 10px;
-  }
-  #projectFilter {
-    background: var(--input-bg); border: 1px solid var(--input-border); border-radius: var(--radius-md);
-    color: var(--text); font: inherit; padding: 9px 10px;
-  }
-  #historyToggle.active { background: var(--teal-bg); color: var(--teal-text); }
+  #searchInput { flex: 1; min-width: 0; }
+  #projectFilter { cursor: pointer; }
+  #historyToggle.active { background: var(--teal-bg); color: var(--teal-text); border-color: color-mix(in srgb, var(--teal) 35%, transparent); }
   .error-banner {
-    background: var(--danger-bg); color: var(--danger-text); border-radius: var(--radius-sm);
-    padding: 10px 14px; margin-bottom: 16px; font-size: 13px;
+    background: var(--danger-bg); color: var(--danger-text); border: 1px solid color-mix(in srgb, var(--red) 35%, transparent);
+    border-radius: var(--radius-md); padding: 10px 14px; margin-bottom: 16px; font-size: 13px;
   }
 
   #tokenDialog {
-    background: var(--surface); color: var(--text); border: 1px solid var(--border);
+    background: var(--surface); color: var(--text); border: 1px solid var(--border-strong);
     border-radius: var(--radius-lg); padding: 18px 20px; width: min(360px, 90vw);
-    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+    margin: auto; box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
   }
-  #tokenDialog::backdrop { background: rgba(0, 0, 0, 0.5); }
-  #tokenDialog h2 { font-size: 15px; font-weight: 700; margin-bottom: 10px; }
-  #tokenDialog input {
-    width: 100%; background: var(--input-bg); border: 1px solid var(--input-border);
-    border-radius: var(--radius-md); color: var(--text); font: inherit; padding: 9px 10px;
-    box-sizing: border-box;
-  }
+  #tokenDialog::backdrop { background: rgba(0, 0, 0, 0.55); backdrop-filter: blur(2px); }
+  #tokenDialog h2 { font-size: 15px; font-weight: 700; margin-bottom: 12px; }
+  #tokenDialog input { width: 100%; }
   #tokenDialog .row { display: flex; gap: 8px; justify-content: flex-end; margin-top: 14px; }
 
-  .new-session-panel {
-    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg);
-    padding: 12px 18px; margin-bottom: 16px;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
-  }
-  .new-session-panel label { font-size: 11px; color: var(--text-muted-1); display: block; margin-top: 10px; }
-  .new-session-panel label:first-child { margin-top: 0; }
-  .new-session-panel input, .new-session-panel textarea, .new-session-panel select {
-    width: 100%; background: var(--input-bg); border: 1px solid var(--input-border); border-radius: var(--radius-md);
-    color: var(--text); font: inherit; padding: 9px 10px; margin-top: 4px;
-  }
-  /* A plain textarea with no border/background of its own, since it lives
-     directly inside the already-bordered .new-session-panel - grows with its
-     content instead of popping a separate panel open (see autoGrowTextarea). */
-  .compose-textarea {
-    background: none; border: none; padding: 0; margin: 0; resize: none;
-    min-height: 24px; max-height: 240px; overflow-y: hidden;
-    transition: height 0.15s ease;
-  }
-  .compose-textarea:focus-visible { border: none; outline: none; }
-  .new-session-panel .row { display: flex; gap: 8px; margin-top: 12px; }
+  /* --- New-session composer --- */
+  /* The panel is itself a .composer; its textarea grows with its content
+     (see autoGrowTextarea) instead of popping a separate panel open. */
+  .new-session-panel { margin-bottom: 20px; padding: 12px 12px 8px 14px; }
+  .new-session-panel .composer-input { font-size: 17px; min-height: 26px; transition: height 0.15s ease; }
+  .new-session-panel label { font-size: 11px; color: var(--text-muted); display: block; }
+  .new-session-panel .advanced-panel input { width: 100%; margin-top: 4px; }
+  .new-session-panel .advanced-inner { padding: 8px 2px 4px; }
 
   .advanced-toggle {
-    font-size: 12px; color: var(--text-muted-1); background: none; padding: 8px 0 0;
-    display: inline-flex; align-items: center; gap: 4px;
+    font-size: 12px; color: var(--text-muted); background: none; border: none; padding: 0 8px; height: 30px;
+    display: inline-flex; align-items: center; gap: 4px; border-radius: 8px;
   }
-  .advanced-toggle:hover { background: none; color: var(--text); }
-  .advanced-toggle .chev { display: inline-block; transition: transform 0.18s ease; }
+  .advanced-toggle:hover { background: var(--surface-2); color: var(--text); }
+  .advanced-toggle .chev { display: inline-block; transition: transform var(--spring-dur) var(--spring); }
   .advanced-toggle[aria-expanded="true"] .chev { transform: rotate(90deg); }
   .advanced-panel { overflow: hidden; height: 0; opacity: 0; }
   .advanced-panel.open { height: auto; opacity: 1; }
 
   .ext-row {
-    display: flex; align-items: center; gap: 10px; padding: 8px 10px;
-    border: 1px solid var(--border); border-radius: var(--radius-sm); margin-bottom: 6px; font-size: 14px;
+    display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: var(--surface);
+    border: 1px solid var(--border); border-radius: var(--radius-md); margin-bottom: 6px; font-size: 14px;
   }
   .ext-row-main { flex: 1; min-width: 0; }
   .ext-row-name { font-weight: 600; }
-  .ext-row-sub { color: var(--text-muted-1); font-size: 13px; margin-top: 2px; overflow-wrap: anywhere; }
+  .ext-row-sub { color: var(--text-muted); font-size: 13px; margin-top: 2px; overflow-wrap: anywhere; }
   #detectedSessionsList:not(:empty) { margin-bottom: 14px; }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { transition-duration: 0.01ms !important; animation: none !important; }
+  }
 </style>
 </head>
 <body>
@@ -428,25 +561,26 @@
     </div>
   </header>
   <div id="errorBanner" class="error-banner" hidden></div>
-  <div id="newSessionPanel" class="new-session-panel">
-    <textarea id="newSessionInstructions" class="compose-textarea" rows="1" placeholder="What should Claude do? (paste or attach images)"></textarea>
+  <div id="newSessionPanel" class="new-session-panel composer">
+    <textarea id="newSessionInstructions" class="composer-input" rows="1" placeholder="What should Claude do? (paste or attach images)"></textarea>
     <div id="newSessionChips" class="attach-chips"></div>
-    <button id="advancedToggle" class="advanced-toggle" type="button" aria-expanded="false">
-      <span class="chev">▸</span> Advanced
-    </button>
-    <div id="advancedPanel" class="advanced-panel">
-      <label>Name (optional)</label>
-      <input id="newSessionName" type="text" placeholder="What is this session for?">
-      <label>Working directory (optional - leave blank to let Claude find it itself)</label>
-      <input id="newSessionWorkdir" type="text" placeholder="/path/to/project">
-      <label>Model</label>
-      <select id="newSessionModel" class="model-select"></select>
+    <div class="composer-bar">
+      <button id="newSessionAttach" class="ghost-btn" type="button" title="Attach image" aria-label="Attach image"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
+      <button id="newSessionIpad" class="ghost-btn" type="button" title="Attach a capture of the iPad screen (USB)" aria-label="Capture iPad"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/></svg></button>
+      <span class="folder" title="Working directory - leave blank to let Claude find it itself"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg><input id="newSessionWorkdir" class="folder-input" type="text" placeholder="Any folder" aria-label="Working directory"></span>
+      <button id="advancedToggle" class="advanced-toggle" type="button" aria-expanded="false">
+        <span class="chev">▸</span> Advanced
+      </button>
+      <div class="end">
+        <select id="newSessionModel" class="model-select" title="Model" aria-label="Model"></select>
+        <button id="newSessionGo" class="send-btn" type="button" title="Start session (Enter)" aria-label="Start session"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button>
+      </div>
     </div>
-    <div class="row">
-      <button id="newSessionGo" class="primary">Go</button>
-      <button id="newSessionAttach" class="attach-btn" type="button" title="Attach image">📎</button>
-      <button id="newSessionIpad" class="attach-btn" type="button" title="Attach a capture of the iPad screen (USB)">📷 iPad</button>
-      <button id="newSessionCancel">Cancel</button>
+    <div id="advancedPanel" class="advanced-panel">
+      <div class="advanced-inner">
+        <label for="newSessionName">Name (optional)</label>
+        <input id="newSessionName" type="text" placeholder="What is this session for?">
+      </div>
     </div>
   </div>
   <div id="columns">
@@ -601,6 +735,26 @@
   const projectFilterSelect = document.getElementById('projectFilter');
   const historyToggleBtn = document.getElementById('historyToggle');
 
+  // The sticky task sidebar fills exactly the visible space below its top
+  // edge: below the header/composer at page top, growing to full height as
+  // the page scrolls and it pins (CSS reads --task-top, see #taskCol).
+  const taskCol = document.getElementById('taskCol');
+  function fitTaskCol() {
+    taskCol.style.setProperty('--task-top', Math.max(16, taskCol.getBoundingClientRect().top) + 'px');
+  }
+  let fitQueued = false;
+  addEventListener('scroll', () => {
+    if (fitQueued) return;
+    fitQueued = true;
+    requestAnimationFrame(() => { fitQueued = false; fitTaskCol(); });
+  }, { passive: true });
+  addEventListener('resize', fitTaskCol);
+  // Things above the columns that change height (the growing composer, the
+  // error banner) move the sidebar's top without any scroll.
+  new ResizeObserver(fitTaskCol).observe(document.querySelector('header'));
+  new ResizeObserver(fitTaskCol).observe(document.getElementById('newSessionPanel'));
+  new ResizeObserver(fitTaskCol).observe(errorBanner);
+
   function showError(msg) {
     errorBanner.textContent = msg;
     errorBanner.hidden = false;
@@ -696,7 +850,12 @@
     } else if (projectFilter) {
       filtered = filtered.filter(t => t.project === projectFilter);
     }
-    return filtered.filter(t => !isHistorical(t.id));
+    // Notion tasks: /api/tasks already returns exactly the open ones, so
+    // Notion is the only thing deciding whether they're listed. A locally
+    // 'finished' session (the Finish button never touches Notion) must not
+    // hide a task that's still open there. Only adhoc/external sessions,
+    // which have no Notion state, fall back to the local status.
+    return filtered.filter(t => t.kind === 'notion' || !isHistorical(t.id));
   }
 
   // Always every running task, unaffected by search/project filter - the
@@ -741,7 +900,26 @@
     return data.name;
   }
 
-  // Paste / drop / 📎 image attach for a textarea. Uploads immediately and
+  // Line icons. PLUS/FOLDER/ARROW_UP also appear inline in the static
+  // new-session markup.
+  const svgIcon = (body) => `<svg class="icon" viewBox="0 0 24 24" aria-hidden="true">${body}</svg>`;
+  const PAPERCLIP_SVG = svgIcon('<path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/>');
+  const PLUS_SVG = svgIcon('<path d="M12 5v14M5 12h14"/>');
+  const ARROW_UP_SVG = svgIcon('<path d="M12 19V5M5 12l7-7 7 7"/>');
+  const STOP_SVG = svgIcon('<rect x="4" y="4" width="16" height="16" rx="3"/>');
+  const CAMERA_SVG = svgIcon('<path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/>');
+  const FOLDER_SVG = svgIcon('<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>');
+
+  // Clicking a composer's padding (not one of its controls) focuses its text,
+  // the way the whole box is the click target in Claude's own composer.
+  document.addEventListener('click', (e) => {
+    const box = e.target.closest('.composer');
+    if (box && (e.target === box || e.target.classList.contains('attach-chips'))) {
+      box.querySelector('.composer-input')?.focus();
+    }
+  });
+
+  // Paste / drop / attach-button image attach for a textarea. Uploads immediately and
   // shows removable thumbnails in `chips`. Returns { take() } which yields the
   // uploaded file names and clears the chips.
   // `ipadBtn` (optional) captures the USB-connected iPad's screen server-side
@@ -776,12 +954,12 @@
     }
     if (ipadBtn) {
       ipadBtn.addEventListener('click', async () => {
-        const label = ipadBtn.textContent;
-        ipadBtn.disabled = true; ipadBtn.textContent = '📷 …';
+        const label = ipadBtn.innerHTML;
+        ipadBtn.disabled = true; ipadBtn.textContent = '…';
         try {
           addChip(await captureIpad());
         } catch (e) { alert(e.message); }
-        finally { ipadBtn.disabled = false; ipadBtn.textContent = label; }
+        finally { ipadBtn.disabled = false; ipadBtn.innerHTML = label; }
       });
     }
     textarea.addEventListener('paste', (e) => {
@@ -818,7 +996,12 @@
   // already used pre-Motion (.open), kept as the source of truth for
   // "is this open" so state-restoration (see openSendBoxIds/openTailIds)
   // doesn't need a second bookkeeping mechanism.
-  function createDisclosure(el, { openClass = 'open', duration = 0.22, ease = 'easeInOut', slide = true } = {}) {
+  // Springs rather than a fixed-duration tween: a re-toggle mid-flight keeps
+  // its velocity instead of restarting the curve. bounce 0 - a height
+  // overshoot would visibly jiggle the content below.
+  const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const SPRING = { type: 'spring', visualDuration: 0.28, bounce: 0 };
+  function createDisclosure(el, { openClass = 'open', slide = true } = {}) {
     const closedY = slide ? 6 : 0;
     // animate() is always called BEFORE the class flips - Motion reads the
     // element's real current style as its animation start point for
@@ -828,7 +1011,7 @@
     // still-running animation on the same element cleanly, so a rapid
     // re-toggle (or one that resumes after a backgrounded tab pauses it)
     // just redirects smoothly instead of getting permanently stuck.
-    function open({ instant = false } = {}) {
+    function open({ instant = reduceMotion } = {}) {
       if (el.classList.contains(openClass)) return;
       if (instant) {
         el.classList.add(openClass);
@@ -837,11 +1020,11 @@
         el.style.transform = '';
         return;
       }
-      animate(el, { height: 'auto', opacity: 1, y: [closedY, 0] }, { duration, ease })
+      animate(el, { height: 'auto', opacity: 1, y: [closedY, 0] }, SPRING)
         .finished.then(() => { el.style.transform = ''; }).catch(() => {});
       el.classList.add(openClass);
     }
-    function close({ instant = false } = {}) {
+    function close({ instant = reduceMotion } = {}) {
       if (!el.classList.contains(openClass)) return;
       if (instant) {
         el.classList.remove(openClass);
@@ -850,7 +1033,7 @@
         el.style.transform = '';
         return;
       }
-      animate(el, { height: 0, opacity: 0, y: [0, closedY] }, { duration, ease })
+      animate(el, { height: 0, opacity: 0, y: [0, closedY] }, SPRING)
         .finished.then(() => {
           el.style.height = '';
           el.style.opacity = '';
@@ -962,7 +1145,11 @@
     } else if (st.status === 'waiting') {
       runBadge = `<span class="badge waiting" title="${escapeHtml(st.waitingReason || '')}">⏳ waiting: ${escapeHtml(st.waitingReason || 'blocked on something external')}</span>`;
     }
-    return runBadge + doneBadge + errBadge + gateBadge;
+    // Running total for the whole conversation (claude -p's total_cost_usd).
+    const costBadge = typeof st.costUsd === 'number'
+      ? `<span class="badge cost" title="API cost of this session so far">$${st.costUsd.toFixed(2)}</span>`
+      : '';
+    return runBadge + doneBadge + errBadge + gateBadge + costBadge;
   }
 
   // Builds one task card, including all of its event listeners. Shared by
@@ -995,7 +1182,7 @@
       const notesHtml = notesCache[t.id] || '<div class="notes">loading notes...</div>';
 
       const topLeftHtml = isNotion
-        ? `<input type="checkbox" class="markDoneCheckbox" ${st && st.markedDone && !st.markDoneError ? 'checked disabled' : ''}>
+        ? `<input type="checkbox" class="markDoneCheckbox">
            <div class="title">${escapeHtml(t.title)} <span class="status-badge">${compact ? '' : statusBadgeHtml(t.id)}</span></div>`
         : `<div class="title">${escapeHtml(t.title || '(untitled session)')} <span class="status-badge">${statusBadgeHtml(t.id)}</span></div>`;
       const dueHtml = isNotion ? `<div class="due ${overdue ? 'overdue' : ''}">${formatDue(t.due_date)}</div>` : '';
@@ -1013,27 +1200,30 @@
       const actionsHtml = isNotion
         ? `<div class="actions">
              <button class="toggleSend" ${sendDisabled ? 'disabled' : ''}>Send to Claude</button>
-             <select class="model-select" title="Model for this run">
-               ${appConfig.models.map(m => `<option value="${escapeHtml(m)}"${m === appConfig.defaultModel ? ' selected' : ''}>${escapeHtml(m)}</option>`).join('')}
-             </select>
-             <button class="resumeBtn" hidden>Resume</button>
-             <button class="interruptBtn warn" hidden>Interrupt</button>
-             <button class="finishBtn danger" ${sendDisabled ? '' : 'hidden'}>Finish</button>
+             <div class="actions-end">
+               <button class="resumeBtn" hidden>Resume</button>
+               <button class="finishBtn danger" ${sendDisabled ? '' : 'hidden'}>Finish</button>
+             </div>
            </div>`
         : `<div class="actions">
-             <button class="resumeBtn" hidden>Resume</button>
-             <button class="interruptBtn warn" hidden>Interrupt</button>
-             <button class="finishBtn danger" ${sendDisabled ? '' : 'hidden'}>Finish</button>
+             <div class="actions-end">
+               <button class="resumeBtn" hidden>Resume</button>
+               <button class="finishBtn danger" ${sendDisabled ? '' : 'hidden'}>Finish</button>
+             </div>
            </div>`;
       const sendBoxHtml = isNotion
         ? `<div class="send-box">
-             <label>Additional instructions (optional)</label>
-             <textarea placeholder="Anything extra for Claude to know..."></textarea>
-             <label>Working directory (optional - leave blank to let Claude find it itself)</label>
-             <input type="text" placeholder="/path/to/project">
-             <div class="row">
-               <button class="go primary">Go</button>
-               <button class="cancel">Cancel</button>
+             <div class="composer">
+               <textarea class="composer-input" placeholder="Anything extra for Claude to know? (optional)"></textarea>
+               <div class="composer-bar">
+                 <span class="folder" title="Working directory - leave blank to let Claude find it itself">${FOLDER_SVG}<input class="folder-input" type="text" placeholder="Any folder" aria-label="Working directory"></span>
+                 <div class="end">
+                   <select class="model-select" title="Model for this run" aria-label="Model">
+                     ${appConfig.models.map(m => `<option value="${escapeHtml(m)}"${m === appConfig.defaultModel ? ' selected' : ''}>${escapeHtml(m)}</option>`).join('')}
+                   </select>
+                   <button class="go send-btn" type="button" title="Start (Enter)" aria-label="Start">${ARROW_UP_SVG}</button>
+                 </div>
+               </div>
              </div>
            </div>`
         : '';
@@ -1056,12 +1246,17 @@
         <div class="transcript-container"></div>
         <div class="reply-box">
           <div class="hint"></div>
-          <textarea placeholder="Reply to Claude... (paste or attach images)"></textarea>
-          <div class="attach-chips"></div>
-          <div class="row">
-            <button class="reply-send primary">Send</button>
-            <button class="reply-attach attach-btn" type="button" title="Attach image">📎</button>
-            <button class="reply-ipad attach-btn" type="button" title="Attach a capture of the iPad screen (USB)">📷 iPad</button>
+          <div class="composer">
+            <textarea class="composer-input" placeholder="Reply to Claude... (paste or attach images)"></textarea>
+            <div class="attach-chips"></div>
+            <div class="composer-bar">
+              <button class="reply-attach ghost-btn" type="button" title="Attach image" aria-label="Attach image">${PLUS_SVG}</button>
+              <button class="reply-ipad ghost-btn" type="button" title="Attach a capture of the iPad screen (USB)" aria-label="Capture iPad">${CAMERA_SVG}</button>
+              <div class="end">
+                <button class="interruptBtn stop-btn" type="button" hidden title="Stop - interrupt Claude" aria-label="Stop">${STOP_SVG}</button>
+                <button class="reply-send send-btn" type="button" title="Send (Enter)" aria-label="Send">${ARROW_UP_SVG}</button>
+              </div>
+            </div>
           </div>
         </div>
         ${actionsHtml}
@@ -1083,9 +1278,13 @@
           else openSendBoxIds.delete(t.id);
         });
       }
-      const cancelBtn = card.querySelector('.cancel');
-      if (cancelBtn) {
-        cancelBtn.addEventListener('click', () => {
+      // No Cancel button (Cowork-style composer): Escape closes the send-box,
+      // as does the "Send to Claude" toggle; Enter starts (sendOnEnter below).
+      const sendBoxTextarea = card.querySelector('.send-box textarea');
+      if (sendBoxTextarea) {
+        autoGrowTextarea(sendBoxTextarea);
+        sendBoxTextarea.addEventListener('keydown', (e) => {
+          if (e.key !== 'Escape') return;
           sendDisclosure.close();
           openSendBoxIds.delete(t.id);
         });
@@ -1144,7 +1343,12 @@
             const r = await fetch(`/api/tasks/${encodeURIComponent(t.id)}/mark-done`, { method: 'POST' });
             const data = await r.json();
             if (!data.ok) throw new Error(data.error || 'failed to mark done');
+            // Notion's Done PATCH succeeded - drop it now rather than wait
+            // for the next refreshTasks() to see it gone from /api/tasks.
+            tasks = tasks.filter(x => x.id !== t.id);
+            lastTasksKey = tasksKey(tasks);
             await pollStatus();
+            renderList();
           } catch (e) {
             alert('Failed to mark done: ' + e.message);
             cb.checked = false;
@@ -1261,15 +1465,38 @@
           const data = await r.json();
           if (!data.ok) throw new Error(data.error || 'failed to send reply');
           textarea.value = '';
+          textarea.dispatchEvent(new Event('input'));
           await pollStatus();
         } catch (e) {
           alert('Failed to send: ' + e.message);
         } finally {
           sendBtn.disabled = false;
+          syncReplyButton(card);
         }
       });
 
+      const replyTextarea = card.querySelector('.reply-box textarea');
+      autoGrowTextarea(replyTextarea);
+      replyTextarea.addEventListener('input', () => syncReplyButton(card));
+      // Attaching/removing an image changes the chips, not the text.
+      new MutationObserver(() => syncReplyButton(card))
+        .observe(card.querySelector('.reply-box .attach-chips'), { childList: true });
+
       return card;
+  }
+
+  // Claude's composer swap: while Claude is working and there's nothing typed,
+  // the send button is a stop button (interrupt); typing turns it back into
+  // send, which queues the message. `card.dataset.busy` is set by the status
+  // updater.
+  function syncReplyButton(card) {
+    const box = card.querySelector('.reply-box');
+    if (!box) return;
+    const empty = !box.querySelector('textarea').value.trim()
+      && !box.querySelector('.attach-chips').children.length;
+    const showStop = card.dataset.busy === '1' && empty;
+    box.querySelector('.interruptBtn').hidden = !showStop;
+    box.querySelector('.reply-send').hidden = showStop;
   }
 
   // Captures any unsent .reply-box/.send-box text from the currently-visible
@@ -1300,11 +1527,12 @@
       if (!draft || card.classList.contains('compact')) continue;
       if (draft.reply) {
         const reply = card.querySelector('.reply-box textarea');
-        if (reply) reply.value = draft.reply;
+        // 'input' so the composer re-grows and re-picks stop vs send.
+        if (reply) { reply.value = draft.reply; reply.dispatchEvent(new Event('input')); }
       }
       if (draft.sendText) {
         const sendText = card.querySelector('.send-box textarea');
-        if (sendText) sendText.value = draft.sendText;
+        if (sendText) { sendText.value = draft.sendText; sendText.dispatchEvent(new Event('input')); }
       }
       if (draft.sendWorkdir) {
         const sendWorkdir = card.querySelector('.send-box input[type="text"]');
@@ -1357,8 +1585,9 @@
     const currentIds = new Set([...running, ...completed, ...others].map(t => t.id));
     const newCardEls = [...runningList.children, ...completedList.children, ...list.children]
       .filter(el => !previousRenderedIds.has(el.dataset.id) && !el.classList.contains('compact'));
-    if (newCardEls.length) {
-      animate(newCardEls, { opacity: [0, 1], y: [8, 0] }, { duration: 0.25, delay: stagger(0.04) });
+    if (newCardEls.length && !reduceMotion) {
+      animate(newCardEls, { opacity: [0, 1], y: [8, 0] },
+        { type: 'spring', visualDuration: 0.32, bounce: 0.12, delay: stagger(0.035) });
     }
     previousRenderedIds = currentIds;
   }
@@ -1614,8 +1843,8 @@
       const busy = Boolean(st && st.status === 'running' && !st.awaitingInput);
       const resumable = Boolean(st && RESUMABLE_STATUSES.includes(st.status) && st.hasSession && !st.markedDone);
 
-      const interruptBtn = card.querySelector('.interruptBtn');
-      if (interruptBtn) interruptBtn.hidden = !busy;
+      card.dataset.busy = busy ? '1' : '';
+      syncReplyButton(card);
 
       const resumeBtn = card.querySelector('.resumeBtn');
       if (resumeBtn) resumeBtn.hidden = !resumable;
@@ -1756,7 +1985,7 @@
         ? ` · Contacts: ${escapeHtml(t.contactName)}` : '';
       const files = t.files.map((f, n) => f.image
         ? `<img data-preview="${n}" alt="${escapeHtml(f.name)}" title="${escapeHtml(f.from)}">`
-        : `<div class="file" title="${escapeHtml(f.from)}">📎 ${escapeHtml(f.name)} · ${(f.size / 1024 / 1024).toFixed(1)} MB</div>`).join('');
+        : `<div class="file" title="${escapeHtml(f.from)}">${PAPERCLIP_SVG} ${escapeHtml(f.name)} · ${(f.size / 1024 / 1024).toFixed(1)} MB</div>`).join('');
       const actions = t.status === 'pending'
         ? `<div class="row"><button class="reject" data-req="${t.id}">Reject</button><button class="send" data-req="${t.id}">Send</button></div>`
         : `<div class="outcome">${t.status === 'sending' ? 'Sending…' : escapeHtml(t.status + (t.result && t.result !== t.status ? ': ' + t.result : ''))}</div>`;
@@ -1870,7 +2099,11 @@
   // shows them); everything else is coloured by its kind's CSS class.
   function dayColorStyle(item) {
     if (!item.color) return '';
-    return `background:${escapeHtmlDay(item.color)};color:${escapeHtmlDay(item.fg || '#fff')}`;
+    // Feeds the tinted .day-chip/.day-block style (a wash of the calendar's
+    // colour plus an edge bar) - the calendar's own fg is meant for a solid
+    // fill, so the text is a lightened mix of the colour instead.
+    const c = escapeHtmlDay(item.color);
+    return `--c:${c};--fg:color-mix(in srgb, ${c} 40%, #fff)`;
   }
 
   function dayChipHtml(item, cls, title) {
@@ -2036,6 +2269,7 @@
         return;
       }
       tasks = data;
+      lastTasksKey = tasksKey(data);
       notesCache = {};
       populateProjectFilter();
       meta.textContent = `refreshed ${new Date().toLocaleTimeString()}`;
@@ -2044,6 +2278,31 @@
     } catch (e) {
       meta.textContent = 'failed to load tasks';
     }
+  }
+
+  // Background re-sync with Notion so tasks checked off (or reopened) in
+  // Notion itself leave/rejoin the list without a manual refresh. Same
+  // diff-guard idea as loadSessions(): only a real change re-renders, and
+  // notesCache is kept so notes aren't re-fetched every tick.
+  let lastTasksKey = '';
+  const tasksKey = list => JSON.stringify(
+    list.map(t => [t.id, t.title, t.due_date, t.project]).sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
+  );
+
+  async function refreshTasks() {
+    try {
+      const r = await fetch('/api/tasks');
+      if (!r.ok) return;
+      const data = await r.json();
+      if (!Array.isArray(data)) return;
+      const key = tasksKey(data);
+      if (key === lastTasksKey) return;
+      lastTasksKey = key;
+      tasks = data;
+      populateProjectFilter();
+      renderList();
+      loadVisibleNotes();
+    } catch {}
   }
 
   // Adhoc + adopted-external sessions - see allItems(). Polled on its own
@@ -2078,7 +2337,6 @@
   const newSessionWorkdir = document.getElementById('newSessionWorkdir');
   const newSessionModel = document.getElementById('newSessionModel');
   const newSessionGo = document.getElementById('newSessionGo');
-  const newSessionCancel = document.getElementById('newSessionCancel');
   const advancedToggle = document.getElementById('advancedToggle');
   const advancedPanel = document.getElementById('advancedPanel');
 
@@ -2123,7 +2381,6 @@
     advancedDisclosure.toggle();
     advancedToggle.setAttribute('aria-expanded', String(willOpen));
   });
-  newSessionCancel.addEventListener('click', closeNewSessionPanel);
   sendOnEnter(newSessionInstructions, newSessionGo);
   const newSessionAttach = attachImages(newSessionInstructions,
     document.getElementById('newSessionChips'), document.getElementById('newSessionAttach'),
@@ -2328,6 +2585,7 @@
   // discovery (claude agents --json) spawns a real subprocess each call.
   setInterval(loadSessions, 10000);
   setInterval(loadExternalSessions, 15000);
+  setInterval(refreshTasks, 60 * 1000);
   // Notion Tasks/Events/Shopping change far less often than running-session
   // status - no need for the 2s pollStatus cadence here.
   setInterval(() => loadDay({ force: true }), 5 * 60 * 1000);

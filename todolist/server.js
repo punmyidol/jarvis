@@ -147,6 +147,12 @@ const ENDSTATE_RE = /```endstate\s*\n([\s\S]*?)```/;
 const DONE_EVIDENCE_FENCE_OPEN = '```done-evidence';
 const DONE_EVIDENCE_FENCE_CLOSE = '```';
 const DONE_EVIDENCE_RE = /```done-evidence\s*\n([\s\S]*?)```/;
+// Session state card: see renderStateCard. Parsed on every turn, unlike endstate.
+const STATE_FENCE_OPEN = '```state';
+const STATE_FENCE_CLOSE = '```';
+const STATE_RE = /```state\s*\n([\s\S]*?)```/;
+const STATE_RE_ALL = /```state\s*\n([\s\S]*?)```/g;
+const MAX_FACTS = 40;
 // A mismatch auto-continues the same session (see runTurn's exit handler)
 // asking the model to reconcile, same mechanism as a real /reply - but bounded,
 // so a model that keeps getting the count wrong eventually surfaces to a human
@@ -177,6 +183,10 @@ const PAYMENT_GATE_TOOLS = [
   // Runs a sequence of clicks/typing in one call - ungated, it bypassed
   // every tool above.
   'mcp__claude-in-chrome__browser_batch',
+  // agent-browser runs through Bash; hooks/payment-gate.js narrows this
+  // matcher to agent-browser commands that act on a page (it allows every
+  // other Bash call without consulting the server).
+  'Bash',
 ];
 const PAYMENT_GATE_HOOK_PATH = path.join(ROOT, 'hooks', 'payment-gate.js');
 // Bash backstop for texting: denies direct Messages sends and agent calls to
@@ -228,6 +238,17 @@ const OUTGOING_DIR = path.join(ROOT, 'uploads', 'outgoing');
 // write onto a Notion task page - a free-standing session has no such page.
 // It also gates the create-task convention below, for the same reason: both
 // need a real parent task page to write onto / relate a new task to.
+// Listed in the prompt so the agent doesn't spend a turn on `gmail.js accounts`.
+// Read at server start - restart after `scripts/gmail-auth.js` adds one.
+function gmailAccountsLine() {
+  const accounts = Object.entries(config.GMAIL_ACCOUNTS);
+  if (!accounts.length) {
+    return 'no accounts are signed in yet (the user runs `node todolist/scripts/gmail-auth.js <label>`), ' +
+      'so it will fail until they do;';
+  }
+  return 'accounts (label = address): ' + accounts.map(([label, a]) => `${label} = ${a.address}`).join(', ') + ';';
+}
+
 function buildSessionConventions({ allowProgressNotes, hasExplicitWorkdir }) {
   const lines = [
     'Your job is to CARRY THIS TASK OUT, not to research it. Researching a ' +
@@ -245,10 +266,35 @@ function buildSessionConventions({ allowProgressNotes, hasExplicitWorkdir }) {
       'browser tool is refused for a site, say so plainly and name the site - ' +
       'the user can grant it in the Chrome extension.',
     '',
+    ...(config.BROWSER_BACKEND === 'agent-browser' ? [
+      'Faster browsing: prefer the agent-browser CLI (run through Bash) over the ' +
+        'mcp__claude-in-chrome__* tools for reading and clicking - it is far ' +
+        'cheaper per page. It attaches to the same Chrome and logins: always pass ' +
+        `--cdp ${config.AGENT_BROWSER_CDP_PORT} (e.g. agent-browser --cdp ${config.AGENT_BROWSER_CDP_PORT} open <url>). ` +
+        'Loop: open <url>, then snapshot -i (an accessibility tree with refs like ' +
+        '@e1), then click @e1 / fill @e2 "text", then snapshot -i again - refs go ' +
+        'stale after any navigation or page change. If a click is blocked by a ' +
+        'banner or overlay, dismiss it and re-snapshot. Run `agent-browser skills ' +
+        'get core` once if you need the command list. Fall back to the Claude in ' +
+        'Chrome tools whenever agent-browser cannot do the job: it errors that it ' +
+        'cannot connect, a PDF viewer, an image/canvas-only page, or a page it ' +
+        'cannot read. Every rule in this prompt about the browser (payment ' +
+        'approval, asking before submitting personal info, no webmail, no texting ' +
+        'through the browser) applies identically to agent-browser.',
+      '',
+    ] : []),
     'You cannot see the user\'s own open Chrome tabs - your tabs are a ' +
       'separate group that starts empty. If the request points at something ' +
       'on their screen ("this page", "this guy", "this email"), say that you ' +
       'can\'t see their tabs and ask them to paste the link or name.',
+    '',
+    'Tabs: every reply of yours runs as a new browser session, so tab IDs from an ' +
+      'earlier reply are invalid ("not in Claude\'s tab group"). Before the first browser ' +
+      'call of EVERY reply, call tabs_context_mcp with createIfEmpty: true and use only the ' +
+      'tab IDs it returns. If a tool says a tab is on a browser-internal URL right after ' +
+      'navigate, the page has not committed yet - check once with tabs_context_mcp instead ' +
+      'of retrying blindly. Read the page (get_page_text / read_page) before using find on ' +
+      'an element you are only guessing exists.',
     '',
     'Single sign-on pages (U-M Okta, Google, Duo) usually go straight through ' +
       'on the user\'s existing session - click Continue / Sign in and see ' +
@@ -285,9 +331,17 @@ function buildSessionConventions({ allowProgressNotes, hasExplicitWorkdir }) {
     '',
     'Email, texts, people and photos - use these to look things up for the task ' +
       '(a code, a confirmation, what someone said, a number), not to browse:',
-    '- Email: the Gmail tools (mcp__claude_ai_Gmail__*) search and read the user\'s mail ' +
-      'and can create drafts. Sending, replying, forwarding and trashing are disabled - ' +
-      'when an email needs to go out, leave a draft and hand back.',
+    `- Email: \`node ${path.join(ROOT, 'gmail.js')}\` works each of the user's mail accounts ` +
+      'through the Gmail API - ' + gmailAccountsLine() + ' `draft --from <account> --to <addr> ' +
+      '--subject <s> (--body <text> | --body-file <path>) [--thread <threadId>] [--attach <path>]...` ' +
+      'saves a draft (--thread replies in that thread; To/Subject default from it), `search <gmail ' +
+      'query> --from <account>` lists threads, `read <threadId> --from <account>` prints one. The ' +
+      'Gmail tools (mcp__claude_ai_Gmail__*) also search/read one of these inboxes. Never compose, ' +
+      'draft, read or send mail in webmail through the browser - one API call there costs many ' +
+      'times fewer tokens than screenshots and clicks. If gmail.js fails (sign-in expired, account ' +
+      'not set up), hand back with the exact error and the subject/body ready to paste; do not ' +
+      'fall back to Chrome. Sending, replying, forwarding and trashing are the user\'s - when an ' +
+      'email needs to go out, leave a draft and hand back.',
     `- Texts (iMessage/SMS): \`node ${path.join(ROOT, 'messages.js')} recent [--days 2]\`, ` +
       '`chat <who>`, `search <text> [--days 30]`.',
     `- People: <who> can be a name, nickname or relation ("mom") - resolved from ` +
@@ -304,6 +358,15 @@ function buildSessionConventions({ allowProgressNotes, hasExplicitWorkdir }) {
       'After queueing, say what is waiting and end your turn; you will be told the ' +
       'outcome in this conversation. Never try to send any other way (AppleScript, ' +
       'Shortcuts, sms:/imessage: links, the browser).',
+    '- PDFs: Chrome\'s PDF viewer cannot be read by the browser tools (empty accessibility ' +
+      'tree), and the Read tool cannot render PDF pages on this machine - do not work a PDF ' +
+      'with screenshots and clicks. Get it onto disk (`curl -L -o <scratch>/x.pdf <url>`, a ' +
+      'browser download, or its vault/upload path) and extract the text with ' +
+      '`/opt/miniconda3/bin/python3 -c "import pdfplumber; ..."` (`page.extract_text()` per ' +
+      'page also answers "which page is X on"; PyMuPDF `import fitz` is there too for scanned ' +
+      'PDFs or page images). Use that absolute interpreter path - the PATH you inherit may not ' +
+      'include miniconda. Fall back to screenshots only if the PDF sits behind a login a ' +
+      'download cannot carry, or the extracted text comes back empty.',
     '- Do not quote private messages or emails back unless they are relevant to the task.',
     '',
     'This is a multi-turn chat session - respond in Markdown, since your ' +
@@ -369,6 +432,22 @@ function buildSessionConventions({ allowProgressNotes, hasExplicitWorkdir }) {
       'somewhere the user will actually find it afterward - not as it having been said once ' +
       'in this chat, which is not the same thing.',
     '',
+    'Live state: the user changes things outside this chat (booking sites, Notion pages) ' +
+      'between your replies, so what you saw earlier in this conversation may be out of ' +
+      'date. Every reply after the first starts with a "Session state" card kept by the ' +
+      'app. Its Decisions are the user\'s own and override anything earlier in the ' +
+      'conversation; its Observed values may be stale. Before you write a site-derived ' +
+      'fact (a time, price, count, date) into Notion, a message or a booking step, re-read ' +
+      'it from its source (open the page, fetch the Notion page) - the live value is ' +
+      'current, the transcript is not. Never change a live value to match an earlier line ' +
+      'in this conversation, and if the live page disagrees with a Decision, do not edit ' +
+      'either - say so and ask. Keep the card current by ending a reply with a fenced ' +
+      'block, one line per fact, whenever the user states a decision or you read a value ' +
+      `that later steps rely on:\n\n${STATE_FENCE_OPEN}\n` +
+      `<short key> | decision | <value> | user\n<short key> | observed | <value> | <url or page id to re-read>\n` +
+      `${STATE_FENCE_CLOSE}\n\nIf the goal itself changes, you may repeat the endstate block ` +
+      'in a later reply and it replaces the old checklist.',
+    '',
     'Action items: whenever this reply needs something from the user before you can ' +
       'continue (missing information, or something open-ended you need from them, with ' +
       'no fixed set of answers to offer) - not for a routine status update - end the ' +
@@ -405,9 +484,10 @@ function buildSessionConventions({ allowProgressNotes, hasExplicitWorkdir }) {
       'Gmail create_draft `attachments[].content` field), and never read a ' +
       'binary file\'s encoded bytes into context - not yourself, not through a subagent. ' +
       'Hand-copying even a 100 KB file takes over an hour and silently corrupts it. ' +
-      'Instead, create the draft/message without the attachment and hand back with an ' +
-      'action item naming the exact file path for the user to attach themselves (or, if ' +
-      'the file is already in Google Drive, link it in the body).',
+      'Instead, pass the file path to `gmail.js draft --attach <path>` (it reads the file ' +
+      'from disk itself). Where that is not possible, create the draft/message without the ' +
+      'attachment and hand back with an action item naming the exact file path for the ' +
+      'user to attach themselves (or, if the file is already in Google Drive, link it in the body).',
   );
   if (allowProgressNotes) {
     lines.push(
@@ -565,6 +645,93 @@ function buildMathPrompt(instructions) {
   ].join('\n');
 }
 
+// Session state card. A resumed turn replays a transcript that can't be edited
+// and goes stale (the user changes things on the site or in Notion between
+// replies), so the app keeps its own short list of facts and puts it at the
+// top of every resumed turn - the newest thing the model reads.
+//   decision: something the user chose; authoritative, only the user changes it
+//   observed: read off a live source; `source` says where to re-read it
+// Fence lines: `key | decision|observed | value | source`.
+function parseStateFence(text) {
+  const out = [];
+  for (const m of String(text).matchAll(STATE_RE_ALL)) {
+    for (const raw of m[1].split('\n')) {
+      const parts = raw.replace(/^[-*]\s*/, '').split('|').map(p => p.trim());
+      if (parts.length < 3) continue;
+      const [key, kind] = parts;
+      if (!key || (kind !== 'decision' && kind !== 'observed')) continue;
+      const source = parts.length > 3 ? parts[parts.length - 1] : '';
+      const value = parts.slice(2, parts.length > 3 ? -1 : undefined).join(' | ');
+      if (!value) continue;
+      out.push({ key, kind, value, source });
+    }
+  }
+  return out;
+}
+
+// Latest wins by key, except an observation never replaces a decision: a page
+// the user hasn't touched must not talk the card out of what they said.
+function mergeFacts(entry, parsed, now = Date.now()) {
+  entry.facts = entry.facts || [];
+  for (const f of parsed) {
+    const i = entry.facts.findIndex(e => e.key.toLowerCase() === f.key.toLowerCase());
+    if (i >= 0 && entry.facts[i].kind === 'decision' && f.kind === 'observed') continue;
+    const fact = { key: f.key, value: f.value, kind: f.kind, source: f.source || '', ts: now };
+    if (i >= 0) entry.facts[i] = fact;
+    else entry.facts.push(fact);
+  }
+  if (entry.facts.length > MAX_FACTS) entry.facts = entry.facts.slice(-MAX_FACTS);
+}
+
+// `pin: ...` lines in a user message become decisions without the model's help.
+function applyPins(entry, message) {
+  const pins = [];
+  for (const m of String(message).matchAll(/^[ \t]*pin:[ \t]*(.+)$/gim)) {
+    const value = m[1].trim();
+    pins.push({ key: `pin: ${value.slice(0, 60)}`, kind: 'decision', value, source: 'user' });
+  }
+  if (pins.length) mergeFacts(entry, pins);
+  return pins.length;
+}
+
+function withStateCard(entry, text) {
+  const card = renderStateCard(entry);
+  return card ? `${card}\n\n${text}` : text;
+}
+
+function formatAge(ms) {
+  const min = Math.max(0, Math.round(ms / 60000));
+  if (min < 1) return 'just now';
+  if (min < 60) return `${min}m ago`;
+  const h = Math.round(min / 60);
+  return h < 48 ? `${h}h ago` : `${Math.round(h / 24)}d ago`;
+}
+
+function renderStateCard(entry, now = Date.now()) {
+  const facts = entry.facts || [];
+  if (!facts.length) return '';
+  const decisions = facts.filter(f => f.kind === 'decision');
+  const observed = facts.filter(f => f.kind === 'observed');
+  const lines = ['[Session state - kept by the app; newer than anything earlier in this conversation]'];
+  if (decisions.length) {
+    lines.push(
+      'Decisions (the user\'s - authoritative, they override anything earlier in this ' +
+        'conversation; never change a live value to contradict one, and if the live ' +
+        'site/page disagrees with one, stop and ask instead of editing either):',
+      ...decisions.map(f => (f.key.startsWith('pin: ') ? `- ${f.value}` : `- ${f.key}: ${f.value}`))
+    );
+  }
+  if (observed.length) {
+    lines.push(
+      'Observed (read from live sources; may be stale - re-read from the source before ' +
+        'writing or acting on it):',
+      ...observed.map(f => `- ${f.key}: ${f.value} (${f.source ? `source: ${f.source}; ` : ''}read ${formatAge(now - f.ts)})`)
+    );
+  }
+  lines.push('[end of session state]');
+  return lines.join('\n');
+}
+
 // Mechanical, not a second LLM call: names exactly which checklist items look
 // uncovered (done-evidence is required to map 1:1 onto endstate, in order) and
 // asks the SAME session to reconcile before it's allowed to finish again.
@@ -611,7 +778,7 @@ function extractToolResultText(content) {
 // never leaks back into the displayed text. progress/create-task are left
 // inline on purpose (see parseStreamJson).
 function cutFences(text) {
-  const cutIndex = [ACTION_ITEMS_RE, OPTIONS_RE, ENDSTATE_RE, DONE_EVIDENCE_RE, WAITING_RE]
+  const cutIndex = [ACTION_ITEMS_RE, OPTIONS_RE, ENDSTATE_RE, DONE_EVIDENCE_RE, WAITING_RE, STATE_RE]
     .map(re => text.match(re))
     .filter(Boolean)
     .reduce((min, m) => Math.min(min, m.index), Infinity);
@@ -651,6 +818,10 @@ function parseStreamJson(id, entry, chunk) {
       // `--resume` (see runTurn) - the process that produced this event is
       // about to exit either way, one-shot by design.
       if (obj.session_id) entry.sessionId = obj.session_id;
+      // `total_cost_usd` is already the whole conversation's running total
+      // (it keeps climbing across --resume'd processes in the logs), so it
+      // replaces, not adds. Display only - nothing is capped on it.
+      if (typeof obj.total_cost_usd === 'number') entry.costUsd = obj.total_cost_usd;
       const rawText = typeof obj.result === 'string' ? obj.result : live.currentAssistantText;
       const isDone = DONE_MARKER_RE.test(rawText);
       // Strip only the marker line itself (the whole line, including its
@@ -664,20 +835,21 @@ function parseStreamJson(id, entry, chunk) {
       // calls - reading it from `result` alone meant it was never captured.
       const textBlocks = live.textBlocks || [];
       const allText = textBlocks.length ? textBlocks.join('\n\n') : text;
-      // Endstate is only ever read from the FIRST assistant turn - checked
-      // here, before this turn is pushed below, so entry.turns still only
-      // holds turns from strictly before this one.
+      // Whether this is the FIRST assistant turn - checked here, before this
+      // turn is pushed below, so entry.turns still only holds turns from
+      // strictly before this one. Only the first turn is REQUIRED to carry an
+      // endstate, but a later one may re-state it when the goal changed (the
+      // old checklist would otherwise be repeated forever).
       const isFirstAssistantTurn = !entry.turns.some(t => t.role === 'assistant');
-      let endstateMatch, endstateItems;
-      if (isFirstAssistantTurn) {
-        endstateMatch = allText.match(ENDSTATE_RE);
-        if (endstateMatch) {
-          endstateItems = endstateMatch[1]
-            .split('\n')
-            .map(l => l.trim().replace(/^[-*]\s*/, ''))
-            .filter(Boolean);
-        }
+      const endstateMatch = allText.match(ENDSTATE_RE);
+      let endstateItems;
+      if (endstateMatch) {
+        endstateItems = endstateMatch[1]
+          .split('\n')
+          .map(l => l.trim().replace(/^[-*]\s*/, ''))
+          .filter(Boolean);
       }
+      mergeFacts(entry, parseStateFence(allText));
       const doneEvidenceMatch = text.match(DONE_EVIDENCE_RE);
       let doneEvidence;
       if (doneEvidenceMatch) {
@@ -765,6 +937,9 @@ function parseStreamJson(id, entry, chunk) {
           entry.endstate = [];
           entry.endstateMissing = true;
         }
+      } else if (endstateItems && endstateItems.length) {
+        entry.endstate = endstateItems;
+        entry.endstateMissing = false;
       }
       // The model - not the process exiting - decides the CONVERSATION is
       // done, via `doneMarkerSeen` (ends the chat session, see runTurn's exit
@@ -937,7 +1112,10 @@ function runTurn(id, entry, text, extraArgs, displayText, images) {
   const child = spawn(
     'claude',
     [
-      '-p', text,
+      // On a resumed turn the state card goes first: the transcript replayed
+      // by --resume can't be edited, so the newest thing it reads must be
+      // what is true now (entry.turns above keeps the text as typed).
+      '-p', extraArgs.includes('--resume') ? withStateCard(entry, text) : text,
       '--output-format', 'stream-json',
       '--include-partial-messages',
       '--verbose',
@@ -1745,6 +1923,7 @@ const server = http.createServer(async (req, res) => {
           endstateMissing: Boolean(entry.endstateMissing),
           lastDoneEvidence: entry.lastDoneEvidence || [],
           evidenceGateFailed: Boolean(entry.evidenceGateFailed),
+          costUsd: typeof entry.costUsd === 'number' ? entry.costUsd : null,
           hasSession: Boolean(entry.sessionId),
           queuedMessages: entry.queuedMessages || [],
           waitingReason: entry.waitingReason || null,
@@ -1824,6 +2003,9 @@ const server = http.createServer(async (req, res) => {
       if (!entry) {
         return sendJson(res, 400, { ok: false, error: 'unknown session id' });
       }
+      // Before the busy/idle split so a pin typed mid-turn is kept too; the
+      // queued message is flushed through runTurn, which carries the card.
+      applyPins(entry, typed);
       // 'completed' (model said done, human hasn't pressed Finish yet) is just
       // as replyable as 'running' - see markFinished/the exit handler.
       const idle = (entry.status === 'running' || entry.status === 'completed') && entry.awaitingInput;

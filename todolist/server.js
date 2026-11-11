@@ -537,6 +537,34 @@ function buildAdhocPrompt(title, instructions, hasExplicitWorkdir) {
     .join('\n');
 }
 
+// Math-tutor session (mode 'math'): the user works problems by hand on an
+// iPad and attaches screenshots of it (see /api/ipad-shot). None of the
+// task-agent conventions apply - no browser, no Notion, no endstate/done
+// fences - so this replaces buildAdhocPrompt rather than extending it.
+function buildMathPrompt(instructions) {
+  return [
+    'You are a patient math tutor. The user is working problems by hand on an iPad;',
+    'each message may attach a screenshot of their iPad screen as an image path -',
+    'view it with the Read tool every time one is attached (it is the latest state',
+    'of their work; earlier screenshots are older states).',
+    '',
+    'How to respond:',
+    '- Start with one short line saying what you see (the problem and how far they got).',
+    '- Check their most recent step first. If there is a mistake, point to the FIRST',
+    '  wrong step and say what is wrong with it - do not fix everything after it.',
+    '- Give a hint or a guiding question for the next step. Do NOT give the full',
+    '  solution or final answer unless they explicitly ask for it.',
+    '- If the handwriting is ambiguous, say what you read and ask rather than guess.',
+    '- Keep it short. No headers, no long preambles.',
+    '- Write ALL math in LaTeX: inline as $...$, display as $$...$$ on their own lines.',
+    '  It is rendered with KaTeX, so do not use code blocks for math.',
+    '- Do not run tools other than Read, and only to view attached images.',
+    '',
+    'User:',
+    instructions && instructions.trim() ? instructions.trim() : 'Check my work.',
+  ].join('\n');
+}
+
 // Mechanical, not a second LLM call: names exactly which checklist items look
 // uncovered (done-evidence is required to map 1:1 onto endstate, in order) and
 // asks the SAME session to reconcile before it's allowed to finish again.
@@ -926,7 +954,9 @@ function runTurn(id, entry, text, extraArgs, displayText, images) {
       // agent has literally zero browser tools: the only MCP server on this
       // machine is project-scoped to the repo, and these runs use the vault as
       // cwd, so they inherit nothing. Needs Chrome running with the extension.
-      '--chrome',
+      // Math sessions only look at screenshots - no browser needed, and
+      // skipping Chrome makes each turn start faster.
+      ...(entry.mode === 'math' ? [] : ['--chrome']),
       '--disallowedTools', BLOCKED_TOOLS.join(','),
       ...extraArgs,
     ],
@@ -1206,20 +1236,27 @@ function titleFromInput(text, max = 60) {
 // Free-standing session, not tied to a Notion task - see buildAdhocPrompt.
 // Id is prefixed so it can never collide with a Notion page id or an
 // `ext:<sessionId>` adopted id (see adoptExternalSession).
-function startAdhocSession(name, instructions, workdir, model, images = []) {
+function startAdhocSession(name, instructions, workdir, model, images = [], mode = null) {
   const id = `adhoc:${crypto.randomUUID()}`;
   const hasExplicitWorkdir = Boolean((workdir || '').trim());
-  const cwd = (workdir || '').trim() || config.VAULT;
+  const isMath = mode === 'math';
+  // Math sessions get their own empty folder: they only Read attached
+  // screenshots, so there's no reason to drop them into the vault.
+  const cwd = isMath ? MATH_WORKDIR : ((workdir || '').trim() || config.VAULT);
+  if (isMath) fs.mkdirSync(cwd, { recursive: true });
   const resolvedModel = config.MODEL_OPTIONS.includes(model) ? model : config.MODEL_DEFAULT;
   const trimmedName = (name || '').trim();
   // What the UI shows as this chat's title AND what Claude sees as its own
   // session name (via buildAdhocPrompt below) - kept identical so the two
   // never diverge the way `name || '(untitled)'` vs. the id fallback used to.
   const title = trimmedName || titleFromInput(instructions);
-  const prompt = withImageNote(buildAdhocPrompt(title, instructions, hasExplicitWorkdir), images);
+  const prompt = withImageNote(
+    isMath ? buildMathPrompt(instructions) : buildAdhocPrompt(title, instructions, hasExplicitWorkdir),
+    images);
 
   const entry = {
     kind: 'adhoc',
+    mode: isMath ? 'math' : null,
     name: trimmedName || null,
     title,
     status: 'running',
@@ -1474,6 +1511,55 @@ function withImageNote(text, names) {
   return `${text}\n\n[The user attached ${names.length} image(s) - view them with the Read tool:\n${paths}]`;
 }
 
+// --- iPad screen capture (USB) ---
+// ipad/grab.swift grabs one frame of a cabled iPad's screen (see that file).
+// Compiled lazily on first use and whenever the source is newer than the
+// binary; the PNG lands in uploads/ under a normal upload name, so it flows
+// through validImages/withImageNote exactly like a pasted image.
+const MATH_WORKDIR = path.join(ROOT, 'math-work');
+const GRAB_SRC = path.join(ROOT, 'ipad', 'grab.swift');
+const GRAB_BIN = path.join(ROOT, 'ipad', '.grab');
+const GRAB_ERRORS = {
+  2: 'No iPad found - plug it in with the cable, unlock it, and tap "Trust" if it asks.',
+  3: 'Camera access is off - allow it for the terminal app running `node server.js` (System Settings > Privacy & Security > Camera), then restart the server.',
+  4: 'The iPad is connected but sent no picture - unlock it, and close QuickTime if it is using the iPad.',
+};
+let grabBuild = null;
+
+function ensureGrabBinary() {
+  try {
+    if (fs.statSync(GRAB_BIN).mtimeMs >= fs.statSync(GRAB_SRC).mtimeMs) return Promise.resolve();
+  } catch {}
+  if (!grabBuild) {
+    grabBuild = new Promise((resolve, reject) => {
+      execFile('swiftc', ['-O', GRAB_SRC, '-o', GRAB_BIN], { timeout: 180000 }, (err, _out, stderr) => {
+        grabBuild = null;
+        if (err) reject(new Error('could not build the iPad grabber: ' + (stderr || err.message).slice(-500)));
+        else resolve();
+      });
+    });
+  }
+  return grabBuild;
+}
+
+async function captureIpad() {
+  await ensureGrabBinary();
+  fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+  const name = crypto.randomUUID() + '.png';
+  const out = path.join(UPLOADS_DIR, name);
+  await new Promise((resolve, reject) => {
+    // 70 s: the very first run can sit on the macOS Camera permission prompt.
+    execFile(GRAB_BIN, [out], { timeout: 70000 }, (err, _stdout, stderr) => {
+      if (!err) return resolve();
+      const code = typeof err.code === 'number' ? err.code : null;
+      const last = String(stderr || '').trim().split('\n').pop();
+      reject(new Error(GRAB_ERRORS[code] || `iPad capture failed: ${last || err.message}`));
+    });
+  });
+  if (!fs.existsSync(out) || fs.statSync(out).size === 0) throw new Error('iPad capture produced no image');
+  return name;
+}
+
 // --- texts queued by agents (messages.js send) ---
 // Each request is shown to the user verbatim and only ever sent by the
 // text-approve route (textsend.send), with the exact handle/text/files stored
@@ -1590,13 +1676,14 @@ const TYPES = {
   '.webmanifest': 'application/manifest+json',
   '.png': 'image/png',
   '.svg': 'image/svg+xml',
+  '.woff2': 'font/woff2',
 };
 
 // Anything servable with no token, so the page itself can load and prompt for
 // one (see isAuthed above). Deliberately an allowlist, not "everything under
 // ROOT that isn't ../.env" - state.json (task transcripts) and logs/*.log
 // live under ROOT too and must never be directly fetchable.
-const STATIC_ALLOW = /^\/(index\.html|manifest\.json|vendor\/[^/]+|icons\/[^/]+)$/;
+const STATIC_ALLOW = /^\/(index\.html|manifest\.json|vendor\/[^/]+|vendor\/katex\/(fonts\/)?[^/]+|icons\/[^/]+)$/;
 
 const server = http.createServer(async (req, res) => {
   const url = req.url.split('?')[0];
@@ -1640,6 +1727,7 @@ const server = http.createServer(async (req, res) => {
         const live = liveProcesses.get(id);
         obj[id] = {
           kind: entry.kind || 'notion',
+          mode: entry.mode || null,
           name: entry.name || null,
           cwd: entry.cwd || null,
           adoptedNote: entry.adoptedNote || null,
@@ -1685,6 +1773,14 @@ const server = http.createServer(async (req, res) => {
         return sendJson(res, 200, { ok: true, name });
       } catch (e) {
         return sendJson(res, 413, { ok: false, error: e.message });
+      }
+    }
+
+    if (url === '/api/ipad-shot' && req.method === 'POST') {
+      try {
+        return sendJson(res, 200, { ok: true, name: await captureIpad() });
+      } catch (e) {
+        return sendJson(res, 500, { ok: false, error: e.message });
       }
     }
 
@@ -1948,11 +2044,11 @@ const server = http.createServer(async (req, res) => {
     // Free-standing session, not tied to any Notion task - see
     // startAdhocSession/buildAdhocPrompt.
     if (url === '/api/sessions/start' && req.method === 'POST') {
-      const { name, instructions, workdir, model, images } = await readBody(req);
+      const { name, instructions, workdir, model, images, mode } = await readBody(req);
       if (!(instructions || '').trim() && !validImages(images).length) {
         return sendJson(res, 400, { ok: false, error: 'instructions are required' });
       }
-      const id = startAdhocSession(name, instructions || '', workdir, model, validImages(images));
+      const id = startAdhocSession(name, instructions || '', workdir, model, validImages(images), mode === 'math' ? 'math' : null);
       return sendJson(res, 200, { ok: true, id });
     }
 
@@ -1966,6 +2062,7 @@ const server = http.createServer(async (req, res) => {
         list.push({
           id,
           kind: entry.kind,
+          mode: entry.mode || null,
           title: entry.title || entry.name || (entry.kind === 'external' ? `adopted session (${entry.cwd})` : id),
           cwd: entry.cwd,
         });
@@ -1993,11 +2090,13 @@ const server = http.createServer(async (req, res) => {
     }
 
     // --- static files (allowlisted only, see STATIC_ALLOW above) ---
-    if (url !== '/' && !STATIC_ALLOW.test(url)) {
+    if (url !== '/' && url !== '/math' && !STATIC_ALLOW.test(url)) {
       res.writeHead(404);
       return res.end('not found');
     }
-    const file = url === '/' ? 'index.html' : decodeURIComponent(url);
+    // /math is the same page, narrowed to math chats client-side (see
+    // MATH_PAGE in index.html).
+    const file = (url === '/' || url === '/math') ? 'index.html' : decodeURIComponent(url);
     const full = path.join(ROOT, path.normalize(file));
     if (!full.startsWith(ROOT)) {
       res.writeHead(403);

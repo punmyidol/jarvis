@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Todolist</title>
 <link rel="manifest" href="/manifest.json">
+<link rel="stylesheet" href="/vendor/katex/katex.min.css">
 <link rel="apple-touch-icon" href="/icons/icon-180.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -316,6 +317,17 @@
   .attach-chip img { height: 56px; border-radius: 6px; display: block; }
   .attach-chip button { position: absolute; top: -6px; right: -6px; width: 18px; height: 18px; padding: 0; border-radius: 50%; line-height: 1; font-size: 12px; }
   .attach-btn { padding: 4px 10px; }
+  #mathBtn { margin-right: 6px; }
+  /* /math: the same app, narrowed to math chats only (see MATH_PAGE). */
+  body:not(.math-page) #mathBtn { display: none; }
+  .math-page #dayCol, .math-page #taskCol, .math-page #newSessionPanel,
+  .math-page #refreshBtn, .math-page #detectedSessionsList { display: none !important; }
+  .math-page #wrap { max-width: 960px; margin: 0 auto; }
+  .math-page #runningCol { flex: 1 1 auto; min-width: 0; width: 100%; }
+  .turn.assistant .math-display { overflow-x: auto; overflow-y: hidden; margin: 6px 0; }
+  .turn.assistant .katex { font-size: 1.08em; }
+  .card.math .turn.assistant { line-height: 1.55; }
+  .card.math .turn-images img { max-height: 260px; }
   .drag-over { outline: 2px dashed var(--accent); }
   .turn-images { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
   .turn-images img { max-height: 140px; max-width: 100%; border-radius: 6px; cursor: zoom-in; }
@@ -411,6 +423,7 @@
     <h1>Todolist</h1>
     <div>
       <span id="meta"></span>
+      <button id="mathBtn" type="button" title="Capture the iPad screen and start a new math chat">📷 New problem</button>
       <button id="refreshBtn">Refresh</button>
     </div>
   </header>
@@ -432,6 +445,7 @@
     <div class="row">
       <button id="newSessionGo" class="primary">Go</button>
       <button id="newSessionAttach" class="attach-btn" type="button" title="Attach image">📎</button>
+      <button id="newSessionIpad" class="attach-btn" type="button" title="Attach a capture of the iPad screen (USB)">📷 iPad</button>
       <button id="newSessionCancel">Cancel</button>
     </div>
   </div>
@@ -485,10 +499,21 @@
 </dialog>
 
 <script src="/vendor/marked.min.js"></script>
+<script src="/vendor/katex/katex.min.js"></script>
 <script type="module">
   // Loaded from a CDN (no build step in this app) - accepted as a hard
   // dependency since this is a personal, always-online local dashboard.
   import { animate, stagger } from "https://cdn.jsdelivr.net/npm/motion@13.4.0/+esm";
+
+  // /math serves this same page narrowed to math-tutor chats: no Day/Tasks
+  // columns, only math sessions listed, and a fresh iPad capture + chat is
+  // started on arrival when none is open (see startMath below).
+  const MATH_PAGE = location.pathname.replace(/\/+$/, '') === '/math';
+  if (MATH_PAGE) {
+    document.body.classList.add('math-page');
+    document.title = 'Math';
+    document.querySelector('header h1').textContent = 'Math';
+  }
 
   // Auth bootstrap: attaches the shared-secret token to every /api/* fetch,
   // so this page works the same from localhost (no token configured yet) and
@@ -678,14 +703,14 @@
   // Running column is meant to be an always-visible "what's executing now"
   // panel, not a subset of the searchable task list.
   function getRunningTasks() {
-    return allItems().filter(t => isRunning(t.id));
+    return allItems().filter(t => isRunning(t.id) && (!MATH_PAGE || t.mode === 'math'));
   }
 
   // Same always-visible treatment as Running, for tasks Claude says are done
   // but nobody's confirmed yet - this is what keeps a just-finished run from
   // getting buried at the bottom of a long task list.
   function getCompletedTasks() {
-    return allItems().filter(t => isCompleted(t.id));
+    return allItems().filter(t => isCompleted(t.id) && (!MATH_PAGE || t.mode === 'math'));
   }
 
   // Finished runs, newest-first. `completedAt` only exists on entries
@@ -708,30 +733,56 @@
     } catch {}
   }
 
+  // Grabs the iPad screen (USB) on the server; resolves to an upload name.
+  async function captureIpad() {
+    const r = await fetch('/api/ipad-shot', { method: 'POST' });
+    const data = await r.json().catch(() => ({}));
+    if (!data.ok) throw new Error(data.error || 'iPad capture failed');
+    return data.name;
+  }
+
   // Paste / drop / 📎 image attach for a textarea. Uploads immediately and
   // shows removable thumbnails in `chips`. Returns { take() } which yields the
   // uploaded file names and clears the chips.
-  function attachImages(textarea, chips, attachBtn) {
+  // `ipadBtn` (optional) captures the USB-connected iPad's screen server-side
+  // (/api/ipad-shot) and adds it as a chip like any other attached image.
+  function attachImages(textarea, chips, attachBtn, ipadBtn) {
     const names = [];
     const input = document.createElement('input');
     input.type = 'file'; input.accept = 'image/*'; input.multiple = true; input.hidden = true;
+    // Chip for an already-uploaded name; `file` gives an instant local preview,
+    // otherwise the thumbnail is fetched back from /api/uploads.
+    function addChip(name, file) {
+      names.push(name);
+      const chip = document.createElement('div');
+      chip.className = 'attach-chip';
+      const img = document.createElement('img');
+      if (file) img.src = URL.createObjectURL(file);
+      else setImgSrc(img, name);
+      const x = document.createElement('button');
+      x.type = 'button'; x.textContent = '×';
+      x.addEventListener('click', () => { names.splice(names.indexOf(name), 1); chip.remove(); });
+      chip.append(img, x);
+      chips.appendChild(chip);
+    }
     async function add(file) {
       if (!file || !file.type.startsWith('image/')) return;
       try {
         const r = await fetch('/api/uploads', { method: 'POST', headers: { 'Content-Type': file.type }, body: file });
         const data = await r.json();
         if (!data.ok) throw new Error(data.error || 'upload failed');
-        names.push(data.name);
-        const chip = document.createElement('div');
-        chip.className = 'attach-chip';
-        const img = document.createElement('img');
-        img.src = URL.createObjectURL(file);
-        const x = document.createElement('button');
-        x.type = 'button'; x.textContent = '×';
-        x.addEventListener('click', () => { names.splice(names.indexOf(data.name), 1); chip.remove(); });
-        chip.append(img, x);
-        chips.appendChild(chip);
+        addChip(data.name, file);
       } catch (e) { alert('Image upload failed: ' + e.message); }
+    }
+    if (ipadBtn) {
+      ipadBtn.addEventListener('click', async () => {
+        const label = ipadBtn.textContent;
+        ipadBtn.disabled = true; ipadBtn.textContent = '📷 …';
+        try {
+          addChip(await captureIpad());
+        } catch (e) { alert(e.message); }
+        finally { ipadBtn.disabled = false; ipadBtn.textContent = label; }
+      });
     }
     textarea.addEventListener('paste', (e) => {
       const files = [...(e.clipboardData ? e.clipboardData.items : [])]
@@ -930,7 +981,7 @@
       const isNotion = t.kind === 'notion';
       const overdue = isNotion && t.due_date && t.due_date < todayLocalStr();
       const card = document.createElement('div');
-      card.className = 'card' + (overdue ? ' overdue' : '') + (compact ? ' compact' : '');
+      card.className = 'card' + (overdue ? ' overdue' : '') + (compact ? ' compact' : '') + (t.mode === 'math' ? ' math' : '');
       card.dataset.id = t.id;
 
       const st = status[t.id];
@@ -1010,6 +1061,7 @@
           <div class="row">
             <button class="reply-send primary">Send</button>
             <button class="reply-attach attach-btn" type="button" title="Attach image">📎</button>
+            <button class="reply-ipad attach-btn" type="button" title="Attach a capture of the iPad screen (USB)">📷 iPad</button>
           </div>
         </div>
         ${actionsHtml}
@@ -1191,7 +1243,8 @@
       if (goBtn) sendOnEnter(card.querySelector('.send-box textarea'), goBtn);
 
       const replyAttach = attachImages(card.querySelector('.reply-box textarea'),
-        card.querySelector('.reply-box .attach-chips'), card.querySelector('.reply-attach'));
+        card.querySelector('.reply-box .attach-chips'), card.querySelector('.reply-attach'),
+        card.querySelector('.reply-ipad'));
       card.querySelector('.reply-send').addEventListener('click', async () => {
         const textarea = card.querySelector('.reply-box textarea');
         const message = textarea.value;
@@ -1310,9 +1363,55 @@
     previousRenderedIds = currentIds;
   }
 
-  function renderMarkdown(text) {
+  // Math sessions only: a separate marked instance that turns $$…$$ / \[…\]
+  // (display) and $…$ / \(…\) (inline) into KaTeX. Kept off the shared
+  // instance so "$20 and $30" in an ordinary task chat stays plain text.
+  function katexHtml(tex, displayMode) {
     try {
-      return marked.parse(text || '');
+      return window.katex.renderToString(tex, { displayMode, throwOnError: false, output: 'html' });
+    } catch {
+      return escapeHtml(tex);
+    }
+  }
+  const mathMarked = new marked.Marked();
+  mathMarked.use({
+    extensions: [
+      {
+        name: 'mathBlock',
+        level: 'block',
+        start(src) { const m = src.match(/\$\$|\\\[/); return m ? m.index : undefined; },
+        tokenizer(src) {
+          const m = /^\$\$([\s\S]+?)\$\$[^\S\n]*(?:\n|$)/.exec(src) || /^\\\[([\s\S]+?)\\\][^\S\n]*(?:\n|$)/.exec(src);
+          if (m) return { type: 'mathBlock', raw: m[0], tex: m[1].trim() };
+        },
+        renderer(token) { return `<div class="math-display">${katexHtml(token.tex, true)}</div>`; },
+      },
+      {
+        name: 'mathInline',
+        level: 'inline',
+        start(src) { const m = src.match(/\$|\\\(/); return m ? m.index : undefined; },
+        tokenizer(src) {
+          let m = /^\$\$([\s\S]+?)\$\$/.exec(src);
+          if (m) return { type: 'mathInline', raw: m[0], tex: m[1].trim(), display: true };
+          m = /^\\\(([\s\S]+?)\\\)/.exec(src);
+          if (m) return { type: 'mathInline', raw: m[0], tex: m[1].trim(), display: false };
+          // $…$: no space just inside the dollars and no digit right after the
+          // closing one (pandoc's rule), so prices don't turn into math.
+          m = /^\$(?!\s)((?:\\.|[^\\$\n])+?)(?<!\s)\$(?!\d)/.exec(src);
+          if (m) return { type: 'mathInline', raw: m[0], tex: m[1], display: false };
+        },
+        renderer(token) { return katexHtml(token.tex, token.display); },
+      },
+    ],
+  });
+
+  function isMathSession(id) {
+    return Boolean(status[id] && status[id].mode === 'math');
+  }
+
+  function renderMarkdown(text, math = false) {
+    try {
+      return (math ? mathMarked : marked).parse(text || '');
     } catch {
       return escapeHtml(text || '');
     }
@@ -1384,7 +1483,7 @@
       if (turn.waiting) {
         html += `<pre class="action-box">${escapeHtml('⏳ WAITING\n' + turn.waiting)}</pre>`;
       }
-      html += renderMarkdown(turn.text);
+      html += renderMarkdown(turn.text, isMathSession(taskId));
       if (turn.interrupted) html += `<div class="sub">_interrupted by you_</div>`;
       el.innerHTML = html;
       if (turn.options && turn.options.length) {
@@ -1430,7 +1529,7 @@
         pending.className = 'turn assistant pending';
         container.appendChild(pending);
       }
-      pending.innerHTML = renderMarkdown(streamingText);
+      pending.innerHTML = renderMarkdown(streamingText, isMathSession(id));
     } else if (pending) {
       pending.remove();
     }
@@ -2027,7 +2126,8 @@
   newSessionCancel.addEventListener('click', closeNewSessionPanel);
   sendOnEnter(newSessionInstructions, newSessionGo);
   const newSessionAttach = attachImages(newSessionInstructions,
-    document.getElementById('newSessionChips'), document.getElementById('newSessionAttach'));
+    document.getElementById('newSessionChips'), document.getElementById('newSessionAttach'),
+    document.getElementById('newSessionIpad'));
 
   newSessionGo.addEventListener('click', async () => {
     const instructions = newSessionInstructions.value;
@@ -2060,6 +2160,41 @@
       newSessionGo.disabled = false;
     }
   });
+
+  // --- /math: capture the iPad screen + start a tutor chat ---
+  // Runs on arrival at /math when no math chat is open, and from the
+  // "New problem" button. Errors land in the empty-state line (not an alert),
+  // since on arrival nobody clicked anything yet.
+  const mathBtn = document.getElementById('mathBtn');
+  async function startMath() {
+    const label = mathBtn.textContent;
+    mathBtn.disabled = true; mathBtn.textContent = '📷 Capturing…';
+    runningEmpty.textContent = 'Capturing the iPad screen…';
+    try {
+      const name = await captureIpad();
+      mathBtn.textContent = '📷 Starting…';
+      runningEmpty.textContent = 'Starting the tutor…';
+      // Math wants the strongest reasoning model on offer.
+      const model = appConfig.models.find(m => m.includes('opus')) || appConfig.defaultModel;
+      const r = await fetch('/api/sessions/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: 'math', name: 'Math', instructions: 'Check my work.', model, images: [name] }),
+      });
+      const data = await r.json();
+      if (!data.ok) throw new Error(data.error || 'failed to start math session');
+      await loadSessions();
+      await pollStatus();
+      const card = document.querySelector(`.card[data-id="${CSS.escape(data.id)}"]`);
+      if (card) card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    } catch (e) {
+      runningEmpty.textContent = e.message + ' Then press "New problem".';
+      runningEmpty.style.display = 'block';
+    } finally {
+      mathBtn.disabled = false; mathBtn.textContent = label;
+    }
+  }
+  mathBtn.addEventListener('click', startMath);
 
   // --- Other Claude Code sessions (read-only, needs-your-input only) ---
   const detectedSessionsList = document.getElementById('detectedSessionsList');
@@ -2170,13 +2305,23 @@
     loadSessions();
     loadDay({ force: true });
   });
-  loadConfig().then(() => {
-    populateNewSessionModel();
-    loadTasks();
-    loadSessions();
-  });
-  loadExternalSessions();
-  loadDay();
+  if (MATH_PAGE) {
+    runningEmpty.textContent = 'No math chat open.';
+    // Wait for config (model list), sessions and status before deciding
+    // whether a math chat is already open - otherwise every reload would
+    // start a new one.
+    Promise.all([loadConfig(), loadSessions(), pollStatus()]).then(() => {
+      if (!getRunningTasks().length && !getCompletedTasks().length) startMath();
+    });
+  } else {
+    loadConfig().then(() => {
+      populateNewSessionModel();
+      loadTasks();
+      loadSessions();
+    });
+    loadExternalSessions();
+    loadDay();
+  }
   pollStatus();
   setInterval(pollStatus, 2000);
   // Own slower cadence - just id/title/cwd listings, not live turn data, and
